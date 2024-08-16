@@ -1,9 +1,9 @@
 {
-    "name": "your.own.package",
-    "displayName": "Your own package",
+    "name": "your.ijs.logger",
+    "displayName": "IJS Logger",
     "version": "1.0.0",
     "unity": "2019.2",
-    "description": "Some description",
+    "description": "Custom logging",
 	"dependencies": {
       
     }
