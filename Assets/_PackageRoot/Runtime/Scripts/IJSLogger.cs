@@ -42,7 +42,7 @@ namespace com.ijs.logger
             Log(message, logType, go, _logColor);
         }
 
-        public static void LogError(
+        public static void LogError()
         {
 
         }
