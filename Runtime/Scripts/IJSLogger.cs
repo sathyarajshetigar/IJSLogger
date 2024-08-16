@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
-namespace Utils
+namespace com.ijs.logger
 {
     public class IJSLogger
     {
