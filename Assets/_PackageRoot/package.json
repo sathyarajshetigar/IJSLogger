@@ -1,5 +1,5 @@
 {
-    "name": "your.ijs.logger",
+    "name": "com.ijs.logger",
     "displayName": "IJS Logger",
     "version": "1.0.0",
     "unity": "2019.2",
