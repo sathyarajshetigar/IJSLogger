@@ -42,6 +42,11 @@ namespace com.ijs.logger
             Log(message, logType, go, _logColor);
         }
 
+        public static void LogError(
+        {
+
+        }
+
         [Conditional("USE_LOGS")]
         public static void Log(
             string message,
