@@ -762,7 +762,8 @@ PlayerSettings:
   webGLWebAssemblyBigInt: 0
   webGLCloseOnQuit: 0
   webWasm2023: 0
-  scriptingDefineSymbols: {}
+  scriptingDefineSymbols:
+    Android: USE_LOGS
   additionalCompilerArguments: {}
   platformArchitecture: {}
   scriptingBackend: {}
