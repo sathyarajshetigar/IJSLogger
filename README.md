@@ -14,11 +14,12 @@ IJSLogger
 The IJSLogger class provides various methods to enable, disable, and modify logging behavior in your Unity project.
 Methods
 ```cs
+IJSLogger(string prefix = "", Color? color = null, bool logsEnabled = true){}
+
 void EnableUseLogs(){}
 void DisableUseLogs(){}
 void OnUseLogsChanged(){}
 void UpdateScriptingDefineSymbols(string val, bool add){}
-IJSLogger(string prefix = "", Color? color = null, bool logsEnabled = true){}
 void ToggleLogs(bool enable){}
 void ModifyPrefix(string prefix){}
 void ModifyColor(Color color){}
