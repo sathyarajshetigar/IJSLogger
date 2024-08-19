@@ -28,7 +28,8 @@ For detailed implementation of each method, refer to IJSLogger.
 When working with IJSLogger, you can refer to the example provided to understand how to integrate and use the logger in your Unity scripts.
 Example Usage
 File: IJSLoggerExample.cs
-```
+
+```cs
 using UnityEngine;
 
 namespace com.ijs.logger.samples
