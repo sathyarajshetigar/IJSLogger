@@ -12,18 +12,18 @@ This repository contains a logging utility designed for Unity projects, providin
 Classes and Methods
 IJSLogger
 The IJSLogger class provides various methods to enable, disable, and modify logging behavior in your Unity project.
-Methods\n
+Methods
 ```cs
-void EnableUseLogs()\n
-void DisableUseLogs()\n
-void OnUseLogsChanged()\n
-void UpdateScriptingDefineSymbols(string val, bool add)\n
-IJSLogger(string prefix = "", Color? color = null, bool logsEnabled = true)\n
-void ToggleLogs(bool enable)\n
-void ModifyPrefix(string prefix)\n
-void ModifyColor(Color color)\n
-void PrintLog(string message, LogType logType = LogType.Log, GameObject go = null)\n
-void Log(string message, LogType type = LogType.Log, GameObject go = null, Color? color = null)\n
+void EnableUseLogs(){}
+void DisableUseLogs(){}
+void OnUseLogsChanged(){}
+void UpdateScriptingDefineSymbols(string val, bool add){}
+IJSLogger(string prefix = "", Color? color = null, bool logsEnabled = true){}
+void ToggleLogs(bool enable){}
+void ModifyPrefix(string prefix){}
+void ModifyColor(Color color){}
+void PrintLog(string message, LogType logType = LogType.Log, GameObject go = null){}
+void Log(string message, LogType type = LogType.Log, GameObject go = null, Color? color = null){}
 ```
 
 For detailed implementation of each method, refer to IJSLogger.
