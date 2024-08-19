@@ -1,7 +1,7 @@
 {
     "name": "com.ijs.logger",
     "displayName": "IJS Logger",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "unity": "2019.2",
     "description": "Custom logging",
 	"dependencies": {
@@ -11,7 +11,7 @@
         {
             "displayName": "Logger Samples",
             "description": "Contains sample scene to demonstrate logger use cases",
-            "path": "Samples~/IJSLogger"
+            "path": "Samples/IJSLogger"
         }
     ]
 }
