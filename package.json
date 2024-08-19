@@ -1,7 +1,7 @@
 {
     "name": "com.ijs.logger",
     "displayName": "IJS Logger",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "unity": "2019.2",
     "description": "Custom logging",
 	"dependencies": {
