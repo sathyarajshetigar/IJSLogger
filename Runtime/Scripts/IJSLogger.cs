@@ -1,13 +1,79 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
+#if UNITY_EDITOR
+using UnityEditor;
+using UnityEditor.Build;
+#endif
 
 namespace com.ijs.logger
 {
     public class IJSLogger
     {
+        #if UNITY_EDITOR
+        private const string UseLogs = "USE_LOGS";
+        private static bool useLogs;
+
+        /// <summary>
+        /// Enables or disables the use of logs in the IJSLogger class.
+        /// This method sets a scripting define symbol based on the enable parameter value.
+        /// </summary>
+        [MenuItem("IJS/Logger/Enable Logs")]
+        private static void EnableUseLogs()
+        {
+            useLogs = true;
+            OnUseLogsChanged();
+        }
+
+        /// <summary>
+        /// The <c>DisableUseLogs</c> method disables the use of logs in the Unity application.
+        /// </summary>
+        [MenuItem("IJS/Logger/Disable Logs")]
+        private static void DisableUseLogs()
+        {
+            useLogs = false;
+            OnUseLogsChanged();
+        }
+
+        /// <summary>
+        /// The <c>IJSLogger</c> class is a utility class that provides logging capabilities in Unity.
+        /// It allows you to print log messages with customizable prefixes, colors, and log types.
+        /// </summary>
+        private static void OnUseLogsChanged()
+        {
+            UpdateScriptingDefineSymbols(UseLogs, useLogs);
+        }
+
+
+        /// <summary>
+        /// Updates the scripting define symbols based on the given value and whether to add or remove it.
+        /// </summary>
+        /// <param name="val">The value to add or remove from the scripting defines symbols.</param>
+        /// <param name="add">A boolean indicating whether to add or remove the given value.</param>
+        private static void UpdateScriptingDefineSymbols(string val, bool add)
+        {
+#if UNITY_EDITOR
+        var platform = NamedBuildTarget.FromBuildTargetGroup(EditorUserBuildSettings.selectedBuildTargetGroup);
+        var definesString = PlayerSettings.GetScriptingDefineSymbols(platform);
+        var allDefines = definesString.Split(';').ToList();
+        if (add)
+        {
+            if (!allDefines.Contains(val))
+                allDefines.Add(val);
+        }
+        else
+        {
+            if (allDefines.Contains(val))
+                allDefines.Remove(val);
+        }
+        PlayerSettings.SetScriptingDefineSymbols(platform, string.Join(";", allDefines.ToArray()));
+#endif
+        }
+#endif
+
         private Color _logColor; // Color for log messages
         private bool _logsEnabled; // Whether or not to log
         private string _logPrefix; // Prefix for log messages
