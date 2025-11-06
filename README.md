@@ -44,6 +44,252 @@ _logger.LogIf(() => debugMode, () => $"Debug: {expensiveOperation()}");
 - **Settings Window** (`Window → IJS Logger → Settings`): Configure channels and scopes
 - **Log Viewer** (`Window → IJS Logger → Log Viewer`): View all Unity logs with filtering
 
+## Architecture & Visual Overview
+
+### System Architecture
+
+```mermaid
+graph TB
+    subgraph "User Code"
+        UC[Your MonoBehaviour]
+    end
+
+    subgraph "IJSLogger Core"
+        Logger[IJSLogger Instance]
+        Static[Static Log Methods]
+    end
+
+    subgraph "Advanced Features"
+        Context[LogContext<br/>Disposable Pattern]
+        Assert[LogAssert<br/>Fluent API]
+        RateLimit[LogRateLimiter<br/>Spam Prevention]
+    end
+
+    subgraph "Configuration"
+        Settings[IJSLoggerSettings<br/>ScriptableObject]
+        Channels[Channel Config<br/>12 Channels]
+    end
+
+    subgraph "Editor Tools"
+        SettingsWin[Settings Window]
+        ViewerWin[Log Viewer Window]
+    end
+
+    subgraph "Unity"
+        Console[Unity Console]
+        DebugLog[Debug.Log API]
+    end
+
+    UC -->|Create Instance| Logger
+    UC -->|Use Static| Static
+    UC -->|using Statement| Context
+    Logger -->|Check Settings| Settings
+    Logger -->|Apply Context| Context
+    Logger -->|Check Rate| RateLimit
+    Logger -->|Returns| Assert
+    Settings -->|Loads| Channels
+    Logger -->|Outputs to| DebugLog
+    Static -->|Outputs to| DebugLog
+    DebugLog -->|Displays in| Console
+    DebugLog -->|Captured by| ViewerWin
+    SettingsWin -->|Configures| Settings
+
+    style Logger fill:#4a9eff
+    style Settings fill:#ffa94a
+    style Context fill:#9eff4a
+    style Assert fill:#ff4a9e
+    style RateLimit fill:#4affe9
+```
+
+### Filtering Hierarchy
+
+```mermaid
+flowchart TD
+    Start([Log Message]) --> Check1{USE_LOGS<br/>Scripting Define?}
+    Check1 -->|Not Defined| Strip[Code Stripped<br/>at Compile Time]
+    Check1 -->|Defined| Check2{Channel<br/>Enabled?}
+
+    Check2 -->|No| Blocked1[❌ Blocked]
+    Check2 -->|Yes| Check3{Channel Scope<br/>Matches Environment?}
+
+    Check3 -->|No| Blocked2[❌ Blocked<br/>Wrong Scope]
+    Check3 -->|Yes| Check4{Instance<br/>Enabled?}
+
+    Check4 -->|No| Blocked3[❌ Blocked]
+    Check4 -->|Yes| Check5{Rate Limit<br/>Passed?}
+
+    Check5 -->|No| Suppressed[⏸️ Suppressed<br/>Count Incremented]
+    Check5 -->|Yes| Output[✅ Log Output<br/>to Unity Console]
+
+    Strip -.->|Zero Runtime Cost| End([End])
+    Blocked1 --> End
+    Blocked2 --> End
+    Blocked3 --> End
+    Suppressed --> End
+    Output --> End
+
+    style Check1 fill:#ff6b6b
+    style Check2 fill:#ffd93d
+    style Check3 fill:#6bcf7f
+    style Check4 fill:#4d96ff
+    style Check5 fill:#a78bfa
+    style Output fill:#51cf66
+    style Strip fill:#ff8787
+    style Blocked1 fill:#ff6b6b
+    style Blocked2 fill:#ff6b6b
+    style Blocked3 fill:#ff6b6b
+    style Suppressed fill:#ffd93d
+```
+
+### Channel System
+
+```mermaid
+graph LR
+    subgraph "12 Log Channels"
+        Default[Default<br/>Always On]
+        Audio[Audio]
+        Network[Network]
+        Physics[Physics]
+        AI[AI]
+        UI[UI]
+        Gameplay[Gameplay]
+        Perf[Performance]
+        Anim[Animation]
+        Input[Input]
+        Render[Rendering]
+        System[System]
+    end
+
+    subgraph "Channel Scopes"
+        EditorOnly[Editor Only<br/>🖥️]
+        BuildOnly[Build Only<br/>📦]
+        Both[Both<br/>🖥️ + 📦]
+    end
+
+    subgraph "Environments"
+        Editor[Unity Editor]
+        Build[Unity Build]
+    end
+
+    Default --> Both
+    Audio --> Both
+    Network --> Both
+    Physics --> Both
+    AI --> Both
+    UI --> Both
+    Gameplay --> Both
+    Perf --> EditorOnly
+    Anim --> Both
+    Input --> Both
+    Render --> Both
+    System --> Both
+
+    EditorOnly -.->|Logs in| Editor
+    BuildOnly -.->|Logs in| Build
+    Both -.->|Logs in| Editor
+    Both -.->|Logs in| Build
+
+    style Default fill:#51cf66
+    style Perf fill:#ffd93d
+    style EditorOnly fill:#4d96ff
+    style BuildOnly fill:#ff6b6b
+    style Both fill:#a78bfa
+```
+
+### Usage Workflow
+
+```mermaid
+sequenceDiagram
+    participant User as Your Code
+    participant Logger as IJSLogger
+    participant Context as LogContext
+    participant Settings as Settings
+    participant RateLimit as RateLimiter
+    participant Unity as Unity Console
+
+    User->>Logger: new IJSLogger("MyClass", Color.cyan, true, LogChannel.Gameplay)
+    Logger->>Settings: Check if Gameplay channel enabled
+    Settings-->>Logger: Enabled ✓
+
+    User->>Context: using (new LogContext("Init"))
+    Context->>Context: Push "Init" to stack
+
+    User->>Logger: PrintLog("Starting")
+    Logger->>Settings: Is channel enabled + scope valid?
+    Settings-->>Logger: Yes ✓
+    Logger->>Context: Get current context
+    Context-->>Logger: "[Init]"
+    Logger->>RateLimit: Should log?
+    RateLimit-->>Logger: Yes ✓
+    Logger->>Unity: Debug.Log("[Init] MyClass:: Starting")
+
+    User->>Logger: LogThrottled("Update", 1.0f)
+    Logger->>RateLimit: Should log? (within 1s)
+    RateLimit-->>Logger: No, suppressed
+
+    Note over User,Context: Wait 1 second...
+
+    User->>Logger: LogThrottled("Update", 1.0f)
+    Logger->>RateLimit: Should log? (after 1s)
+    RateLimit-->>Logger: Yes ✓ (suppressed 59x)
+    Logger->>Unity: Debug.Log("Update (suppressed 59x)")
+
+    User->>Logger: Assert(health > 0, "Invalid!")
+    Logger->>Unity: Debug.LogError("ASSERTION FAILED: Invalid!")
+    Logger-->>User: LogAssert fluent API
+    User->>Logger: .OnFailure(() => health = 0)
+
+    User->>Context: Dispose (end of using block)
+    Context->>Context: Pop "Init" from stack
+```
+
+### Feature Comparison
+
+```mermaid
+graph TD
+    subgraph "v1.0.11 - Basic Logging"
+        V1[Colored Logs]
+        V2[Prefixes]
+        V3[Instance Enable/Disable]
+        V4[Global USE_LOGS]
+    end
+
+    subgraph "v1.1.0 - Advanced Features"
+        V5[12 Channel System]
+        V6[Channel Scopes<br/>Editor/Build/Both]
+        V7[Smart Rate Limiting]
+        V8[Log Contexts]
+        V9[Assertion System]
+        V10[Conditional Logging]
+        V11[Settings Window]
+        V12[Log Viewer Window]
+    end
+
+    V1 --> V5
+    V2 --> V5
+    V3 --> V6
+    V4 --> V6
+    V5 --> V7
+    V6 --> V8
+    V7 --> V9
+    V8 --> V10
+    V9 --> V11
+    V10 --> V12
+
+    style V1 fill:#e0e0e0
+    style V2 fill:#e0e0e0
+    style V3 fill:#e0e0e0
+    style V4 fill:#e0e0e0
+    style V5 fill:#4a9eff
+    style V6 fill:#ffa94a
+    style V7 fill:#9eff4a
+    style V8 fill:#ff4a9e
+    style V9 fill:#4affe9
+    style V10 fill:#a78bfa
+    style V11 fill:#51cf66
+    style V12 fill:#ffd93d
+```
+
 ## Quick Start
 
 ### Basic Usage
