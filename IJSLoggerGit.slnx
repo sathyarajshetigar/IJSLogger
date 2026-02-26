@@ -1,0 +1,5 @@
+﻿<Solution>
+  <Project Path="IJSLoggerRuntimeAssembly.csproj" />
+  <Project Path="Assembly-CSharp.csproj" />
+  <Project Path="IJSLoggerEditorAssembly.csproj" />
+</Solution>
