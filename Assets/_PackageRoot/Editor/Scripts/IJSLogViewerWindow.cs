@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
@@ -39,6 +40,8 @@ namespace com.ijs.logger
         }
 
         private List<LogEntry> _logs = new List<LogEntry>();
+        private HashSet<LogEntry> _selectedLogs = new HashSet<LogEntry>();
+        private LogEntry _lastClickedLog;
         private Vector2 _scrollPosition;
         private string _searchFilter = "";
         private bool _showLogs = true;
@@ -46,12 +49,14 @@ namespace com.ijs.logger
         private bool _showErrors = true;
         private bool _showIJSLoggerOnly = false;
         private bool _autoScroll = true;
+        private bool _showTimestamp = true;
         private int _maxLogs = 1000;
 
         private GUIStyle _logStyle;
         private GUIStyle _warningStyle;
         private GUIStyle _errorStyle;
         private GUIStyle _ijsLoggerStyle;
+        private GUIStyle _selectedStyle;
         private bool _stylesInitialized;
 
         [MenuItem("Window/IJS Logger/Log Viewer")]
@@ -95,6 +100,10 @@ namespace com.ijs.logger
             _ijsLoggerStyle.normal.background = MakeTexture(2, 2, new Color(0.2f, 0.3f, 0.4f, 0.2f));
             _ijsLoggerStyle.padding = new RectOffset(5, 5, 3, 3);
 
+            _selectedStyle = new GUIStyle(EditorStyles.helpBox);
+            _selectedStyle.normal.background = MakeTexture(2, 2, new Color(0.17f, 0.36f, 0.53f, 0.7f));
+            _selectedStyle.padding = new RectOffset(5, 5, 3, 3);
+
             _stylesInitialized = true;
         }
 
@@ -137,14 +146,14 @@ namespace com.ijs.logger
 
         private void DrawToolbar()
         {
-            EditorGUILayout.BeginVertical(EditorStyles.toolbar);
-
             // Row 1: Filter toggles
-            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
 
             if (GUILayout.Button("Clear", EditorStyles.toolbarButton, GUILayout.Width(50)))
             {
                 _logs.Clear();
+                _selectedLogs.Clear();
+                _lastClickedLog = null;
             }
 
             GUILayout.Space(10);
@@ -176,13 +185,16 @@ namespace com.ijs.logger
 
             GUILayout.FlexibleSpace();
 
+            _showTimestamp = GUILayout.Toggle(_showTimestamp, "Timestamp",
+                EditorStyles.toolbarButton, GUILayout.Width(75));
+
             _autoScroll = GUILayout.Toggle(_autoScroll, "Auto-scroll",
                 EditorStyles.toolbarButton, GUILayout.Width(80));
 
             EditorGUILayout.EndHorizontal();
 
             // Row 2: Search
-            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
             GUILayout.Label("Search:", GUILayout.Width(50));
             _searchFilter = EditorGUILayout.TextField(_searchFilter, EditorStyles.toolbarSearchField);
 
@@ -195,15 +207,50 @@ namespace com.ijs.logger
             EditorGUILayout.EndHorizontal();
 
             // Row 3: Settings
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.Label($"Max Logs: {_maxLogs}", GUILayout.Width(80));
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            GUILayout.Label($"Max Logs: {_maxLogs}", GUILayout.Width(110));
+            GUILayout.Space(4);
             _maxLogs = (int)GUILayout.HorizontalSlider(_maxLogs, 100, 5000, GUILayout.Width(150));
 
             GUILayout.FlexibleSpace();
 
-            if (GUILayout.Button("Export Logs", EditorStyles.toolbarButton, GUILayout.Width(80)))
+            if (GUILayout.Button("Export / Copy ▾", EditorStyles.toolbarDropDown, GUILayout.Width(110)))
             {
-                ExportLogs();
+                var menu = new GenericMenu();
+                bool hasSelection = _selectedLogs.Count > 0;
+
+                menu.AddItem(new GUIContent("Copy All Logs"), false, () => CopyLogsToClipboard(false, false));
+                menu.AddItem(new GUIContent("Copy All Logs + Stack Traces"), false, () => CopyLogsToClipboard(true, false));
+                menu.AddSeparator("");
+
+                if (hasSelection)
+                {
+                    menu.AddItem(new GUIContent($"Copy Selected ({_selectedLogs.Count})"), false, () => CopyLogsToClipboard(false, true));
+                    menu.AddItem(new GUIContent($"Copy Selected + Stack Traces ({_selectedLogs.Count})"), false, () => CopyLogsToClipboard(true, true));
+                }
+                else
+                {
+                    menu.AddDisabledItem(new GUIContent("Copy Selected (none selected)"));
+                    menu.AddDisabledItem(new GUIContent("Copy Selected + Stack Traces (none selected)"));
+                }
+
+                menu.AddSeparator("");
+                menu.AddItem(new GUIContent("Export All to File"), false, () => ExportLogs(true, false));
+                menu.AddItem(new GUIContent("Export All to File (no Stack Traces)"), false, () => ExportLogs(false, false));
+                menu.AddSeparator("");
+
+                if (hasSelection)
+                {
+                    menu.AddItem(new GUIContent($"Export Selected to File ({_selectedLogs.Count})"), false, () => ExportLogs(true, true));
+                    menu.AddItem(new GUIContent($"Export Selected to File (no Stack Traces) ({_selectedLogs.Count})"), false, () => ExportLogs(false, true));
+                }
+                else
+                {
+                    menu.AddDisabledItem(new GUIContent("Export Selected to File (none selected)"));
+                    menu.AddDisabledItem(new GUIContent("Export Selected to File (no Stack Traces) (none selected)"));
+                }
+
+                menu.ShowAsContext();
             }
 
             if (GUILayout.Button("Settings", EditorStyles.toolbarButton, GUILayout.Width(60)))
@@ -212,8 +259,6 @@ namespace com.ijs.logger
             }
 
             EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.EndVertical();
         }
 
         private void DrawLogList()
@@ -221,6 +266,15 @@ namespace com.ijs.logger
             var filteredLogs = GetFilteredLogs();
 
             EditorGUILayout.BeginVertical();
+
+            // Detect manual scroll to auto-disable auto-scroll
+            if (_autoScroll && Event.current.type == EventType.ScrollWheel && Event.current.delta.y < 0)
+            {
+                _autoScroll = false;
+                Repaint();
+            }
+
+            var previousScroll = _scrollPosition;
             _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
 
             if (filteredLogs.Count == 0)
@@ -229,9 +283,9 @@ namespace com.ijs.logger
             }
             else
             {
-                foreach (var log in filteredLogs)
+                for (int i = 0; i < filteredLogs.Count; i++)
                 {
-                    DrawLogEntry(log);
+                    DrawLogEntry(filteredLogs[i], filteredLogs, i);
                 }
 
                 // Auto-scroll to bottom
@@ -245,33 +299,75 @@ namespace com.ijs.logger
             EditorGUILayout.EndVertical();
         }
 
-        private void DrawLogEntry(LogEntry log)
+        private void DrawLogEntry(LogEntry log, List<LogEntry> filteredLogs, int index)
         {
             var style = GetStyleForLog(log);
+            bool isSelected = _selectedLogs.Contains(log);
+            var boxStyle = isSelected ? _selectedStyle : (log.isIJSLogger ? _ijsLoggerStyle : EditorStyles.helpBox);
 
-            EditorGUILayout.BeginVertical(log.isIJSLogger ? _ijsLoggerStyle : EditorStyles.helpBox);
+            var rect = EditorGUILayout.BeginHorizontal(boxStyle, GUILayout.MinHeight(22));
 
-            // Header with timestamp and type
-            EditorGUILayout.BeginHorizontal();
+            // Handle click selection (left mouse button only)
+            if (Event.current.type == EventType.MouseDown && Event.current.button == 0 && rect.Contains(Event.current.mousePosition))
+            {
+                var evt = Event.current;
+                if (evt.shift && _lastClickedLog != null)
+                {
+                    // Shift-click: range select
+                    int lastIndex = filteredLogs.IndexOf(_lastClickedLog);
+                    if (lastIndex >= 0)
+                    {
+                        int from = Mathf.Min(lastIndex, index);
+                        int to = Mathf.Max(lastIndex, index);
+                        if (!evt.command && !evt.control)
+                            _selectedLogs.Clear();
+                        for (int i = from; i <= to; i++)
+                            _selectedLogs.Add(filteredLogs[i]);
+                    }
+                }
+                else if (evt.command || evt.control)
+                {
+                    // Cmd/Ctrl-click: toggle individual
+                    if (_selectedLogs.Contains(log))
+                        _selectedLogs.Remove(log);
+                    else
+                        _selectedLogs.Add(log);
+                }
+                else
+                {
+                    // Normal click: single select
+                    _selectedLogs.Clear();
+                    _selectedLogs.Add(log);
+                }
+                _lastClickedLog = log;
+                evt.Use();
+                Repaint();
+            }
 
-            var timeStr = TimeSpan.FromSeconds(log.timestamp).ToString(@"hh\:mm\:ss\.fff");
-            EditorGUILayout.LabelField(timeStr, GUILayout.Width(100));
+            // Timestamp
+            if (_showTimestamp)
+            {
+                var timeStr = TimeSpan.FromSeconds(log.timestamp).ToString(@"hh\:mm\:ss\.fff");
+                EditorGUILayout.LabelField(timeStr, GUILayout.Width(100));
+            }
 
+            // Type icon
             var typeIcon = GetIconForLogType(log.type);
             EditorGUILayout.LabelField(new GUIContent(typeIcon), GUILayout.Width(20));
 
+            // IJS tag
             if (log.isIJSLogger)
             {
                 EditorGUILayout.LabelField("[IJS]", EditorStyles.boldLabel, GUILayout.Width(40));
             }
 
+            // Message — use a label so the text is always visible
+            EditorGUILayout.LabelField(log.message, style);
+
             EditorGUILayout.EndHorizontal();
 
-            // Message
-            EditorGUILayout.SelectableLabel(log.message, style, GUILayout.ExpandHeight(true));
-
-            // Stack trace (collapsible)
-            if (!string.IsNullOrEmpty(log.stackTrace) && log.type == LogType.Error)
+            // Stack trace (collapsible) for errors
+            if (!string.IsNullOrEmpty(log.stackTrace) && (log.type == LogType.Error || log.type == LogType.Exception))
             {
                 if (GUILayout.Button("Show Stack Trace", EditorStyles.miniButton))
                 {
@@ -279,8 +375,7 @@ namespace com.ijs.logger
                 }
             }
 
-            EditorGUILayout.EndVertical();
-            EditorGUILayout.Space(2);
+            EditorGUILayout.Space(1);
         }
 
         private GUIStyle GetStyleForLog(LogEntry log)
@@ -353,8 +448,45 @@ namespace com.ijs.logger
             return count;
         }
 
-        private void ExportLogs()
+        private List<LogEntry> GetLogsForAction(bool selectedOnly)
         {
+            if (selectedOnly)
+            {
+                // Return selected logs in the order they appear in filtered list
+                var filteredLogs = GetFilteredLogs();
+                return filteredLogs.Where(log => _selectedLogs.Contains(log)).ToList();
+            }
+            return GetFilteredLogs();
+        }
+
+        private void CopyLogsToClipboard(bool includeStackTrace, bool selectedOnly)
+        {
+            var logs = GetLogsForAction(selectedOnly);
+            if (logs.Count == 0)
+            {
+                ShowNotification(new GUIContent(selectedOnly ? "No logs selected" : "No logs to copy"));
+                return;
+            }
+
+            var content = new System.Text.StringBuilder();
+            foreach (var log in logs)
+            {
+                var timeStr = TimeSpan.FromSeconds(log.timestamp).ToString(@"hh\:mm\:ss\.fff");
+                var cleanMessage = Regex.Replace(log.message, "<.*?>", "");
+                content.AppendLine($"[{timeStr}] [{log.type}] {cleanMessage}");
+                if (includeStackTrace && !string.IsNullOrEmpty(log.stackTrace))
+                {
+                    content.AppendLine(log.stackTrace);
+                }
+            }
+
+            GUIUtility.systemCopyBuffer = content.ToString();
+            ShowNotification(new GUIContent($"Copied {logs.Count} logs"));
+        }
+
+        private void ExportLogs(bool includeStackTrace, bool selectedOnly)
+        {
+            var logs = GetLogsForAction(selectedOnly);
             var path = EditorUtility.SaveFilePanel("Export Logs", "", $"IJSLogs_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt", "txt");
             if (string.IsNullOrEmpty(path))
                 return;
@@ -362,18 +494,17 @@ namespace com.ijs.logger
             try
             {
                 var content = new System.Text.StringBuilder();
-                content.AppendLine($"IJS Logger - Log Export");
+                content.AppendLine($"IJS Logger - Log Export{(selectedOnly ? " (Selected)" : "")}");
                 content.AppendLine($"Exported: {DateTime.Now}");
-                content.AppendLine($"Total Logs: {_logs.Count}");
+                content.AppendLine($"Total Logs: {logs.Count}");
                 content.AppendLine(new string('=', 80));
                 content.AppendLine();
 
-                var filteredLogs = GetFilteredLogs();
-                foreach (var log in filteredLogs)
+                foreach (var log in logs)
                 {
                     var timeStr = TimeSpan.FromSeconds(log.timestamp).ToString(@"hh\:mm\:ss\.fff");
                     content.AppendLine($"[{timeStr}] [{log.type}] {log.message}");
-                    if (!string.IsNullOrEmpty(log.stackTrace))
+                    if (includeStackTrace && !string.IsNullOrEmpty(log.stackTrace))
                     {
                         content.AppendLine($"Stack Trace:\n{log.stackTrace}");
                     }

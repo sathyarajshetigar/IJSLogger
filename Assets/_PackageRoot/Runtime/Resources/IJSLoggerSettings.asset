@@ -1,0 +1,50 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 11c451615ac9240fe903e874cf0c0131, type: 3}
+  m_Name: IJSLoggerSettings
+  m_EditorClassIdentifier: IJSLoggerRuntimeAssembly::com.ijs.logger.IJSLoggerSettings
+  channelConfigs:
+  - channel: 1
+    scope: 2
+    enabled: 1
+  - channel: 2
+    scope: 2
+    enabled: 1
+  - channel: 3
+    scope: 2
+    enabled: 1
+  - channel: 4
+    scope: 2
+    enabled: 1
+  - channel: 5
+    scope: 2
+    enabled: 1
+  - channel: 6
+    scope: 2
+    enabled: 1
+  - channel: 7
+    scope: 0
+    enabled: 1
+  - channel: 8
+    scope: 2
+    enabled: 1
+  - channel: 9
+    scope: 2
+    enabled: 1
+  - channel: 10
+    scope: 2
+    enabled: 1
+  - channel: 11
+    scope: 2
+    enabled: 1
+  enableRateLimiting: 1
+  defaultRateLimitSeconds: 0.1
