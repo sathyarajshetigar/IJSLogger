@@ -8,10 +8,10 @@ using com.ijs.logger;
 public class IJSLoggerExamples : MonoBehaviour
 {
     // Create loggers for different channels
-    private readonly IJSLogger _gameplayLogger = new IJSLogger("Gameplay", Color.cyan, true, LogChannel.Gameplay);
-    private readonly IJSLogger _audioLogger = new IJSLogger("Audio", Color.yellow, true, LogChannel.Audio);
-    private readonly IJSLogger _networkLogger = new IJSLogger("Network", Color.green, true, LogChannel.Network);
-    private readonly IJSLogger _performanceLogger = new IJSLogger("Perf", Color.magenta, true, LogChannel.Performance);
+    private readonly IJSLogger _gameplayLogger = IJSLogger.Create("Gameplay", Color.cyan, true, LogChannel.Gameplay);
+    private readonly IJSLogger _audioLogger = IJSLogger.Create("Audio", Color.yellow, true, LogChannel.Audio);
+    private readonly IJSLogger _networkLogger = IJSLogger.Create("Network", Color.green, true, LogChannel.Network);
+    private readonly IJSLogger _performanceLogger = IJSLogger.Create("Perf", Color.magenta, true, LogChannel.Performance);
 
     [Header("Example Settings")]
     [SerializeField] private float health = 100f;

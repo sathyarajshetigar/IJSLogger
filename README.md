@@ -207,7 +207,7 @@ sequenceDiagram
     participant RateLimit as RateLimiter
     participant Unity as Unity Console
 
-    User->>Logger: new IJSLogger("MyClass", Color.cyan, true, LogChannel.Gameplay)
+    User->>Logger: IJSLogger.Create("MyClass", Color.cyan, true, LogChannel.Gameplay)
     Logger->>Settings: Check if Gameplay channel enabled
     Settings-->>Logger: Enabled ✓
 
@@ -301,7 +301,7 @@ using com.ijs.logger;
 public class MyGame : MonoBehaviour
 {
     // Create logger with channel
-    private readonly IJSLogger _logger = new IJSLogger("MyGame", Color.cyan, true, LogChannel.Gameplay);
+    private readonly IJSLogger _logger = IJSLogger.Create("MyGame", Color.cyan, true, LogChannel.Gameplay);
 
     void Start()
     {
@@ -315,13 +315,15 @@ public class MyGame : MonoBehaviour
 }
 ```
 
+Use `IJSLogger.Create(...)` as the preferred creation path when you want to skip allocating a real logger while instance logging is disabled or `USE_LOGS` is not defined.
+
 ### Advanced Usage
 
 ```csharp
 public class AdvancedExample : MonoBehaviour
 {
-    private readonly IJSLogger _gameplay = new IJSLogger("Gameplay", Color.cyan, true, LogChannel.Gameplay);
-    private readonly IJSLogger _perf = new IJSLogger("Perf", Color.magenta, true, LogChannel.Performance);
+    private readonly IJSLogger _gameplay = IJSLogger.Create("Gameplay", Color.cyan, true, LogChannel.Gameplay);
+    private readonly IJSLogger _perf = IJSLogger.Create("Perf", Color.magenta, true, LogChannel.Performance);
 
     [SerializeField] private float health = 100f;
 
@@ -556,7 +558,8 @@ IJSLogger(
 | `Assert(condition, message)` | Assert condition, returns fluent LogAssert |
 | `ValidateNotNull(obj, paramName)` | Validate object is not null |
 | `ValidateRange(value, min, max, paramName)` | Validate value is in range |
-| `ToggleLogs(enable)` | Enable/disable this logger instance |
+| `EnableLogs()` | Attempts to enable this logger. Returns `false` when the logger was already disabled and must be recreated |
+| `DisableLogs()` | Disable this logger instance; returns `true` when it changed state |
 | `ModifyPrefix(prefix)` | Change the log prefix |
 | `ModifyColor(color)` | Change the log color |
 
@@ -616,8 +619,8 @@ If no settings asset exists:
 
 1. **Use Channels**: Organize logs by system for better filtering
    ```csharp
-   var audioLogger = new IJSLogger("Audio", Color.yellow, true, LogChannel.Audio);
-   var networkLogger = new IJSLogger("Network", Color.green, true, LogChannel.Network);
+   var audioLogger = IJSLogger.Create("Audio", Color.yellow, true, LogChannel.Audio);
+   var networkLogger = IJSLogger.Create("Network", Color.green, true, LogChannel.Network);
    ```
 
 2. **Use Contexts**: Group related logs together
@@ -656,8 +659,8 @@ If no settings asset exists:
 
 7. **Color Code Systems**: Use consistent colors for each system
    ```csharp
-   var audioLogger = new IJSLogger("Audio", Color.yellow, true, LogChannel.Audio);
-   var aiLogger = new IJSLogger("AI", Color.magenta, true, LogChannel.AI);
+   var audioLogger = IJSLogger.Create("Audio", Color.yellow, true, LogChannel.Audio);
+   var aiLogger = IJSLogger.Create("AI", Color.magenta, true, LogChannel.AI);
    ```
 
 ## Performance
@@ -686,7 +689,7 @@ See `Assets/_PackageRoot/Samples~/IJSLoggerExamples.cs` for comprehensive exampl
 1. Check if `USE_LOGS` scripting define is enabled: `IJS → Logger → Enable Logs`
 2. Verify channel is enabled: `Window → IJS Logger → Settings`
 3. Check channel scope matches current environment (Editor vs Build)
-4. Ensure logger instance is enabled: `logger.ToggleLogs(true)`
+4. If the logger was created disabled, create a new logger with logging enabled
 5. For throttled logs, check if rate limit interval has passed
 
 ### Settings Not Working
@@ -706,16 +709,16 @@ See `Assets/_PackageRoot/Samples~/IJSLoggerExamples.cs` for comprehensive exampl
 The new version is **backwards compatible**. Existing code will work without changes:
 
 ```csharp
-// Old code still works
+// Existing code still works
 var logger = new IJSLogger("MyClass", Color.cyan);
 logger.PrintLog("Hello");
 ```
 
-To use new features, simply add the channel parameter:
+To avoid allocating unnecessary logger instances when logging is disabled or `USE_LOGS` is not defined, prefer `IJSLogger.Create(...)`:
 
 ```csharp
-// New code with channel
-var logger = new IJSLogger("MyClass", Color.cyan, true, LogChannel.Gameplay);
+// Recommended creation path
+var logger = IJSLogger.Create("MyClass", Color.cyan, true, LogChannel.Gameplay);
 ```
 
 ## Changelog

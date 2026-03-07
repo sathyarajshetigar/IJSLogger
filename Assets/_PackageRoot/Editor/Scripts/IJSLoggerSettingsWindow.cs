@@ -282,7 +282,7 @@ namespace com.ijs.logger
             EditorGUILayout.LabelField("Quick Start", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
                 "1. Create a logger instance:\n" +
-                "   var logger = new IJSLogger(\"MyClass\", Color.cyan, true, LogChannel.Gameplay);\n\n" +
+                "   var logger = IJSLogger.Create(\"MyClass\", Color.cyan, true, LogChannel.Gameplay);\n\n" +
                 "2. Log messages:\n" +
                 "   logger.PrintLog(\"Hello World\");\n\n" +
                 "3. Use advanced features:\n" +
