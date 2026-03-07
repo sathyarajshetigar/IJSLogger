@@ -263,7 +263,7 @@ namespace com.ijs.logger
 #endif
 
         private Color _logColor; // Color for log messages
-        private readonly bool _isNoOpLogger; // Shared logger used when logs are disabled
+        private readonly bool _isNoOpLogger; // Whether this instance is the shared no-op logger
         private bool _logsEnabled; // Whether or not to log
         private string _logPrefix; // Prefix for log messages
         private LogChannel _channel; // Channel for filtering logs
@@ -278,8 +278,8 @@ namespace com.ijs.logger
         }
 
         /// <summary>
-        /// Creates a logger instance only when logging is enabled and compiled in.
-        /// Returns a shared no-op logger when logs are disabled or <c>USE_LOGS</c> is not defined.
+        /// Creates a logger instance only when <paramref name="logsEnabled"/> is true and <c>USE_LOGS</c> is defined.
+        /// Returns a shared no-op logger when either condition is not met.
         /// </summary>
         public static IJSLogger Create(string prefix = "", Color? color = null, bool logsEnabled = true, LogChannel channel = LogChannel.Default)
         {
