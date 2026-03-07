@@ -494,7 +494,7 @@ IJSLogger(string prefix = "", Color? color = null, bool logsEnabled = true, LogC
 | `Assert(condition, message)` | Assert condition, returns fluent LogAssert |
 | `ValidateNotNull(obj, paramName)` | Validate object is not null |
 | `ValidateRange(value, min, max, paramName)` | Validate value is in range |
-| `EnableLogs()` | Returns whether this logger is currently enabled; disabled loggers cannot be re-enabled |
+| `EnableLogs()` | Attempts to enable this logger. Returns `false` when the logger was already disabled and must be recreated |
 | `DisableLogs()` | Disable this logger instance; returns `true` when it changed state |
 | `ModifyPrefix(prefix)` | Change the log prefix |
 | `ModifyColor(color)` | Change the log color |

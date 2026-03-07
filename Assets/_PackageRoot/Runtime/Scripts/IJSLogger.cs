@@ -313,19 +313,27 @@ namespace com.ijs.logger
 
         /// <summary>
         /// Attempts to enable logging for this instance.
-        /// Returns <c>false</c> if the logger is currently disabled because disabled loggers cannot be re-enabled.
+        /// Returns <c>false</c> if the logger is a no-op logger or has been disabled, because disabled loggers cannot be re-enabled.
         /// </summary>
         public bool EnableLogs()
         {
-            return _logsEnabled;
+            if (_isNoOpLogger)
+                return false;
+
+            if (_logsEnabled)
+                return true;
+
+            return false;
         }
 
         /// <summary>
         /// Disables logging for this instance.
         /// Returns <c>true</c> when the state changes and <c>false</c> when the logger is already disabled.
+        /// For no-op loggers, this method has no effect and returns <c>false</c>.
         /// </summary>
         public bool DisableLogs()
         {
+            if (_isNoOpLogger) return false;
             if (!_logsEnabled) return false;
 
             _logsEnabled = false;
