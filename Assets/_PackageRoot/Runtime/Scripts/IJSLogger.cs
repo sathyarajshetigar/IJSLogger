@@ -199,6 +199,8 @@ namespace com.ijs.logger
 
     public class IJSLogger
     {
+        private static readonly IJSLogger DisabledLogger = new IJSLogger(false);
+
         #if UNITY_EDITOR
         private const string UseLogs = "USE_LOGS";
         private static bool useLogs;
@@ -261,9 +263,43 @@ namespace com.ijs.logger
 #endif
 
         private Color _logColor; // Color for log messages
+        private readonly bool _isNoOpLogger; // Shared logger used when logs are disabled
         private bool _logsEnabled; // Whether or not to log
         private string _logPrefix; // Prefix for log messages
         private LogChannel _channel; // Channel for filtering logs
+
+        private IJSLogger(bool logsEnabled)
+        {
+            _logColor = Color.white;
+            _logPrefix = string.Empty;
+            _logsEnabled = logsEnabled;
+            _channel = LogChannel.Default;
+            _isNoOpLogger = !logsEnabled;
+        }
+
+        /// <summary>
+        /// Creates a logger instance only when logging is enabled and compiled in.
+        /// Returns a shared no-op logger when logs are disabled or <c>USE_LOGS</c> is not defined.
+        /// </summary>
+        public static IJSLogger Create(string prefix = "", Color? color = null, bool logsEnabled = true, LogChannel channel = LogChannel.Default)
+        {
+            if (!ShouldCreateLogger(logsEnabled))
+                return DisabledLogger;
+
+            return new IJSLogger(prefix, color, logsEnabled, channel);
+        }
+
+        private static bool ShouldCreateLogger(bool logsEnabled)
+        {
+            if (!logsEnabled)
+                return false;
+
+#if USE_LOGS
+            return true;
+#else
+            return false;
+#endif
+        }
 
         public IJSLogger(string prefix = "", Color? color = null, bool logsEnabled = true, LogChannel channel = LogChannel.Default)
         {
@@ -271,20 +307,24 @@ namespace com.ijs.logger
             _logPrefix = prefix;
             _logsEnabled = logsEnabled;
             _channel = channel;
+            _isNoOpLogger = false;
         }
 
         public void ToggleLogs(bool enable)
         {
+            if (_isNoOpLogger) return;
             _logsEnabled = enable;
         }
 
         public void ModifyPrefix(string prefix)
         {
+            if (_isNoOpLogger) return;
             _logPrefix = prefix;
         }
 
         public void ModifyColor(Color color)
         {
+            if (_isNoOpLogger) return;
             _logColor = color;
         }
 
@@ -318,6 +358,7 @@ namespace com.ijs.logger
         [Conditional("USE_LOGS")]
         public void LogIf(bool condition, string message, LogType logType = LogType.Log, GameObject go = null)
         {
+            if (!_logsEnabled) return;
             if (condition)
                 PrintLog(message, logType, go);
         }
@@ -328,6 +369,7 @@ namespace com.ijs.logger
         [Conditional("USE_LOGS")]
         public void LogIf(Func<bool> condition, Func<string> messageBuilder, LogType logType = LogType.Log, GameObject go = null)
         {
+            if (!_logsEnabled) return;
             if (condition())
                 PrintLog(messageBuilder(), logType, go);
         }
@@ -338,6 +380,7 @@ namespace com.ijs.logger
         [Conditional("USE_LOGS")]
         public void LogThrottled(string message, float minIntervalSeconds, LogType logType = LogType.Log, GameObject go = null)
         {
+            if (!_logsEnabled) return;
             var key = $"{GetHashCode()}_{message}";
             if (LogRateLimiter.ShouldLog(key, minIntervalSeconds))
             {

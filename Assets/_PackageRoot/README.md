@@ -194,7 +194,7 @@ sequenceDiagram
     participant RateLimit as RateLimiter
     participant Unity as Unity Console
 
-    User->>Logger: new IJSLogger("MyClass", Color.cyan, true, LogChannel.Gameplay)
+    User->>Logger: IJSLogger.Create("MyClass", Color.cyan, true, LogChannel.Gameplay)
     Logger->>Settings: Check if Gameplay channel enabled
     Settings-->>Logger: Enabled ✓
 
@@ -241,7 +241,7 @@ using com.ijs.logger;
 public class MyClass : MonoBehaviour
 {
     // Create a logger with prefix, color, enabled state, and channel
-    private readonly IJSLogger _logger = new IJSLogger("MyClass", Color.cyan, true, LogChannel.Gameplay);
+    private readonly IJSLogger _logger = IJSLogger.Create("MyClass", Color.cyan, true, LogChannel.Gameplay);
 
     void Start()
     {
@@ -254,6 +254,8 @@ public class MyClass : MonoBehaviour
     }
 }
 ```
+
+Use `IJSLogger.Create(...)` to avoid allocating a new logger when logging is disabled for that instance or when `USE_LOGS` is not defined.
 
 ## Channel System
 
@@ -278,10 +280,10 @@ Create channels with different scopes:
 
 ```cs
 // Editor-only logger (won't log in builds)
-var editorLogger = new IJSLogger("Editor", Color.yellow, true, LogChannel.Performance);
+var editorLogger = IJSLogger.Create("Editor", Color.yellow, true, LogChannel.Performance);
 
 // All loggers of the same channel share the same enabled/scope settings
-var gameplayLogger = new IJSLogger("Gameplay", Color.cyan, true, LogChannel.Gameplay);
+var gameplayLogger = IJSLogger.Create("Gameplay", Color.cyan, true, LogChannel.Gameplay);
 ```
 
 Configure channels in: **Window → IJS Logger → Settings**
@@ -424,9 +426,9 @@ using com.ijs.logger;
 public class CompleteExample : MonoBehaviour
 {
     // Create loggers for different systems
-    private readonly IJSLogger _gameplay = new IJSLogger("Gameplay", Color.cyan, true, LogChannel.Gameplay);
-    private readonly IJSLogger _network = new IJSLogger("Network", Color.green, true, LogChannel.Network);
-    private readonly IJSLogger _perf = new IJSLogger("Perf", Color.magenta, true, LogChannel.Performance);
+    private readonly IJSLogger _gameplay = IJSLogger.Create("Gameplay", Color.cyan, true, LogChannel.Gameplay);
+    private readonly IJSLogger _network = IJSLogger.Create("Network", Color.green, true, LogChannel.Network);
+    private readonly IJSLogger _perf = IJSLogger.Create("Perf", Color.magenta, true, LogChannel.Performance);
 
     [SerializeField] private float health = 100f;
 
