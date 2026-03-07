@@ -558,7 +558,8 @@ IJSLogger(
 | `Assert(condition, message)` | Assert condition, returns fluent LogAssert |
 | `ValidateNotNull(obj, paramName)` | Validate object is not null |
 | `ValidateRange(value, min, max, paramName)` | Validate value is in range |
-| `ToggleLogs(enable)` | Enable/disable this logger instance |
+| `EnableLogs()` | Returns whether this logger is currently enabled; disabled loggers cannot be re-enabled |
+| `DisableLogs()` | Disable this logger instance; returns `true` when it changed state |
 | `ModifyPrefix(prefix)` | Change the log prefix |
 | `ModifyColor(color)` | Change the log color |
 
@@ -688,7 +689,7 @@ See `Assets/_PackageRoot/Samples~/IJSLoggerExamples.cs` for comprehensive exampl
 1. Check if `USE_LOGS` scripting define is enabled: `IJS → Logger → Enable Logs`
 2. Verify channel is enabled: `Window → IJS Logger → Settings`
 3. Check channel scope matches current environment (Editor vs Build)
-4. Ensure logger instance is enabled: `logger.ToggleLogs(true)`
+4. If the logger was created disabled, create a new logger with logging enabled
 5. For throttled logs, check if rate limit interval has passed
 
 ### Settings Not Working

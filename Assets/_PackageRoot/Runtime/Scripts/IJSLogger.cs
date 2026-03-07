@@ -280,6 +280,7 @@ namespace com.ijs.logger
         /// <summary>
         /// Creates a logger instance only when <paramref name="logsEnabled"/> is true and <c>USE_LOGS</c> is defined.
         /// Returns a shared no-op logger when either condition is not met.
+        /// Loggers returned in a disabled state cannot be enabled later; create a new logger if you need logging enabled.
         /// </summary>
         public static IJSLogger Create(string prefix = "", Color? color = null, bool logsEnabled = true, LogChannel channel = LogChannel.Default)
         {
@@ -310,10 +311,37 @@ namespace com.ijs.logger
             _isNoOpLogger = false;
         }
 
+        /// <summary>
+        /// Attempts to enable logging for this instance.
+        /// Returns <c>false</c> if the logger is currently disabled because disabled loggers cannot be re-enabled.
+        /// </summary>
+        public bool EnableLogs()
+        {
+            return _logsEnabled;
+        }
+
+        /// <summary>
+        /// Disables logging for this instance.
+        /// Returns <c>true</c> when the state changes and <c>false</c> when the logger is already disabled.
+        /// </summary>
+        public bool DisableLogs()
+        {
+            if (!_logsEnabled) return false;
+
+            _logsEnabled = false;
+            return true;
+        }
+
+        [Obsolete("Use EnableLogs() or DisableLogs() instead. Disabled loggers cannot be re-enabled after creation.")]
         public void ToggleLogs(bool enable)
         {
-            if (_isNoOpLogger) return;
-            _logsEnabled = enable;
+            if (enable)
+            {
+                EnableLogs();
+                return;
+            }
+
+            DisableLogs();
         }
 
         public void ModifyPrefix(string prefix)
