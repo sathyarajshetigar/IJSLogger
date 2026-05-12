@@ -92,7 +92,7 @@ namespace com.ijs.logger
             var line = sb.ToString();
             // Use byte count, not character count, so rotation triggers correctly
             // for messages containing multi-byte UTF-8 characters.
-            var bytes = Encoding.UTF8.GetByteCount(line) + Environment.NewLine.Length;
+            var bytes = Encoding.UTF8.GetByteCount(line) + Encoding.UTF8.GetByteCount(Environment.NewLine);
 
             lock (_gate)
             {
