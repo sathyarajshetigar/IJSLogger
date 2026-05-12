@@ -1,9 +1,13 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
+using Object = UnityEngine.Object;
 #if UNITY_EDITOR
 using UnityEditor;
 using UnityEditor.Build;
@@ -41,7 +45,9 @@ namespace com.ijs.logger
     }
 
     /// <summary>
-    /// Handles rate limiting for log messages to prevent spam.
+    /// Thread-safe rate limiter for log messages with bounded memory usage.
+    /// Uses a soft-LRU eviction policy: when the cache exceeds <see cref="MaxEntries"/>,
+    /// the entries with the oldest <c>LastLogTime</c> are dropped down to <see cref="TrimTo"/>.
     /// </summary>
     public static class LogRateLimiter
     {
@@ -51,7 +57,16 @@ namespace com.ijs.logger
             public int SuppressedCount;
         }
 
-        private static readonly Dictionary<string, LogEntry> LogCache = new Dictionary<string, LogEntry>();
+        private static readonly ConcurrentDictionary<string, LogEntry> LogCache =
+            new ConcurrentDictionary<string, LogEntry>();
+
+        /// <summary>Maximum number of distinct keys retained before eviction triggers.</summary>
+        public static int MaxEntries = 4096;
+
+        /// <summary>Target size after eviction. Must be &lt; <see cref="MaxEntries"/>.</summary>
+        public static int TrimTo = 3072;
+
+        private static int _trimInProgress;
 
         /// <summary>
         /// Checks if a log should be displayed based on rate limiting.
@@ -61,21 +76,24 @@ namespace com.ijs.logger
         /// <returns>True if the log should be displayed, false if suppressed</returns>
         public static bool ShouldLog(string key, float rateLimitSeconds)
         {
-            if (!LogCache.TryGetValue(key, out var entry))
-            {
-                LogCache[key] = new LogEntry { LastLogTime = Time.unscaledTime, SuppressedCount = 0 };
-                return true;
-            }
+            if (key == null) return true;
 
-            if (Time.unscaledTime - entry.LastLogTime >= rateLimitSeconds)
-            {
-                entry.LastLogTime = Time.unscaledTime;
-                entry.SuppressedCount = 0;
-                return true;
-            }
+            var now = SafeUnscaledTime();
+            var entry = LogCache.GetOrAdd(key, _ => new LogEntry { LastLogTime = float.NegativeInfinity });
 
-            entry.SuppressedCount++;
-            return false;
+            lock (entry)
+            {
+                if (now - entry.LastLogTime >= rateLimitSeconds)
+                {
+                    entry.LastLogTime = now;
+                    entry.SuppressedCount = 0;
+                    MaybeTrim();
+                    return true;
+                }
+
+                entry.SuppressedCount++;
+                return false;
+            }
         }
 
         /// <summary>
@@ -83,24 +101,67 @@ namespace com.ijs.logger
         /// </summary>
         public static int GetSuppressedCount(string key)
         {
+            if (key == null) return 0;
             return LogCache.TryGetValue(key, out var entry) ? entry.SuppressedCount : 0;
         }
 
-        /// <summary>
-        /// Clears all rate limiting data.
-        /// </summary>
-        public static void Clear()
+        /// <summary>Clears all rate limiting data.</summary>
+        public static void Clear() => LogCache.Clear();
+
+        private static float SafeUnscaledTime()
         {
-            LogCache.Clear();
+            // Time.unscaledTime can only be read from the main thread. If called from a
+            // background thread we fall back to a process-relative time.
+            try { return Time.unscaledTime; }
+            catch { return (float)(DateTime.UtcNow - _processStart).TotalSeconds; }
+        }
+
+        private static readonly DateTime _processStart = DateTime.UtcNow;
+
+        private static void MaybeTrim()
+        {
+            if (LogCache.Count <= MaxEntries) return;
+            if (Interlocked.CompareExchange(ref _trimInProgress, 1, 0) != 0) return;
+            try
+            {
+                var snapshot = LogCache.ToArray();
+                var target = Math.Max(0, Math.Min(TrimTo, MaxEntries - 1));
+                var toRemove = snapshot.Length - target;
+                if (toRemove <= 0) return;
+
+                var ordered = snapshot.OrderBy(kv => kv.Value.LastLogTime).Take(toRemove);
+                foreach (var kv in ordered)
+                    LogCache.TryRemove(kv.Key, out _);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _trimInProgress, 0);
+            }
         }
     }
 
     /// <summary>
     /// Provides scoped context for log messages using the disposable pattern.
+    /// Contexts are stored in an <see cref="AsyncLocal{T}"/> stack so they flow across
+    /// <c>await</c> points and remain isolated between threads/tasks.
     /// </summary>
     public class LogContext : IDisposable
     {
-        private static readonly Stack<string> ContextStack = new Stack<string>();
+        private static readonly AsyncLocal<Stack<string>> Local = new AsyncLocal<Stack<string>>();
+
+        private static Stack<string> Current
+        {
+            get
+            {
+                var s = Local.Value;
+                if (s == null)
+                {
+                    s = new Stack<string>();
+                    Local.Value = s;
+                }
+                return s;
+            }
+        }
 
         /// <summary>
         /// Gets the current context string formatted for log messages.
@@ -109,38 +170,34 @@ namespace com.ijs.logger
         {
             get
             {
-                if (ContextStack.Count == 0) return "";
-                var contexts = new List<string>(ContextStack);
+                var stack = Local.Value;
+                if (stack == null || stack.Count == 0) return "";
+                var contexts = new List<string>(stack);
                 contexts.Reverse();
                 return $"[{string.Join(" > ", contexts)}] ";
             }
         }
 
-        /// <summary>
-        /// Creates a new log context scope.
-        /// </summary>
-        /// <param name="context">The context name</param>
+        private bool _disposed;
+
+        /// <summary>Creates a new log context scope.</summary>
         public LogContext(string context)
         {
-            ContextStack.Push(context);
+            Current.Push(context ?? string.Empty);
         }
 
-        /// <summary>
-        /// Removes this context from the stack when disposed.
-        /// </summary>
+        /// <summary>Removes this context from the stack when disposed.</summary>
         public void Dispose()
         {
-            if (ContextStack.Count > 0)
-                ContextStack.Pop();
+            if (_disposed) return;
+            _disposed = true;
+            var stack = Local.Value;
+            if (stack != null && stack.Count > 0)
+                stack.Pop();
         }
 
-        /// <summary>
-        /// Clears all contexts.
-        /// </summary>
-        public static void Clear()
-        {
-            ContextStack.Clear();
-        }
+        /// <summary>Clears all contexts on the current logical thread.</summary>
+        public static void Clear() => Local.Value?.Clear();
     }
 
     /// <summary>
@@ -148,25 +205,23 @@ namespace com.ijs.logger
     /// </summary>
     public class LogAssert
     {
-        private readonly IJSLogger _logger;
         private readonly bool _condition;
         private readonly string _message;
 
-        internal LogAssert(IJSLogger logger, bool condition, string message)
+        internal LogAssert(IJSLogger logger, bool condition, string message,
+            string callerFilePath, int callerLineNumber, string callerMemberName)
         {
-            _logger = logger;
             _condition = condition;
             _message = message;
 
-            if (!condition)
+            if (!condition && logger != null)
             {
-                _logger.PrintLog($"ASSERTION FAILED: {message}", LogType.Error);
+                logger.LogAt(LogType.Error, $"ASSERTION FAILED: {message}", null,
+                    callerFilePath, callerLineNumber, callerMemberName);
             }
         }
 
-        /// <summary>
-        /// Executes a callback if the assertion fails.
-        /// </summary>
+        /// <summary>Executes a callback if the assertion fails.</summary>
         public LogAssert OnFailure(Action callback)
         {
             if (!_condition)
@@ -174,9 +229,7 @@ namespace com.ijs.logger
             return this;
         }
 
-        /// <summary>
-        /// Breaks into the debugger if attached and assertion fails.
-        /// </summary>
+        /// <summary>Breaks into the debugger if attached and assertion fails.</summary>
         public LogAssert BreakDebugger()
         {
             if (!_condition && System.Diagnostics.Debugger.IsAttached)
@@ -185,9 +238,7 @@ namespace com.ijs.logger
         }
 
 #if UNITY_EDITOR
-        /// <summary>
-        /// Pauses the Unity Editor if the assertion fails.
-        /// </summary>
+        /// <summary>Pauses the Unity Editor if the assertion fails.</summary>
         public LogAssert PauseEditor()
         {
             if (!_condition)
@@ -201,14 +252,10 @@ namespace com.ijs.logger
     {
         private static readonly IJSLogger DisabledLogger = new IJSLogger(false);
 
-        #if UNITY_EDITOR
+#if UNITY_EDITOR
         private const string UseLogs = "USE_LOGS";
         private static bool useLogs;
 
-        /// <summary>
-        /// Enables or disables the use of logs in the IJSLogger class.
-        /// This method sets a scripting define symbol based on the enable parameter value.
-        /// </summary>
         [MenuItem("IJS/Logger/Enable Logs")]
         private static void EnableUseLogs()
         {
@@ -216,9 +263,6 @@ namespace com.ijs.logger
             OnUseLogsChanged();
         }
 
-        /// <summary>
-        /// The <c>DisableUseLogs</c> method disables the use of logs in the Unity application.
-        /// </summary>
         [MenuItem("IJS/Logger/Disable Logs")]
         private static void DisableUseLogs()
         {
@@ -226,47 +270,93 @@ namespace com.ijs.logger
             OnUseLogsChanged();
         }
 
-        /// <summary>
-        /// The <c>IJSLogger</c> class is a utility class that provides logging capabilities in Unity.
-        /// It allows you to print log messages with customizable prefixes, colors, and log types.
-        /// </summary>
-        private static void OnUseLogsChanged()
-        {
-            UpdateScriptingDefineSymbols(UseLogs, useLogs);
-        }
+        private static void OnUseLogsChanged() => UpdateScriptingDefineSymbols(UseLogs, useLogs);
 
-
-        /// <summary>
-        /// Updates the scripting define symbols based on the given value and whether to add or remove it.
-        /// </summary>
-        /// <param name="val">The value to add or remove from the scripting defines symbols.</param>
-        /// <param name="add">A boolean indicating whether to add or remove the given value.</param>
         private static void UpdateScriptingDefineSymbols(string val, bool add)
         {
-#if UNITY_EDITOR
-        var platform = NamedBuildTarget.FromBuildTargetGroup(EditorUserBuildSettings.selectedBuildTargetGroup);
-        var definesString = PlayerSettings.GetScriptingDefineSymbols(platform);
-        var allDefines = definesString.Split(';').ToList();
-        if (add)
-        {
-            if (!allDefines.Contains(val))
-                allDefines.Add(val);
-        }
-        else
-        {
-            if (allDefines.Contains(val))
-                allDefines.Remove(val);
-        }
-        PlayerSettings.SetScriptingDefineSymbols(platform, string.Join(";", allDefines.ToArray()));
-#endif
+            var platform = NamedBuildTarget.FromBuildTargetGroup(EditorUserBuildSettings.selectedBuildTargetGroup);
+            var definesString = PlayerSettings.GetScriptingDefineSymbols(platform);
+            var allDefines = definesString.Split(';').ToList();
+            if (add)
+            {
+                if (!allDefines.Contains(val)) allDefines.Add(val);
+            }
+            else
+            {
+                if (allDefines.Contains(val)) allDefines.Remove(val);
+            }
+            PlayerSettings.SetScriptingDefineSymbols(platform, string.Join(";", allDefines.ToArray()));
         }
 #endif
 
-        private Color _logColor; // Color for log messages
-        private readonly bool _isNoOpLogger; // Whether this instance is the shared no-op logger
-        private bool _logsEnabled; // Whether or not to log
-        private string _logPrefix; // Prefix for log messages
-        private LogChannel _channel; // Channel for filtering logs
+        // -------- Global handler / sink installation --------
+
+        private static IJSLogHandler _globalHandler;
+
+        /// <summary>
+        /// The currently installed global <see cref="IJSLogHandler"/>, or <c>null</c>
+        /// if <see cref="InstallGlobalHandler"/> has not been called.
+        /// </summary>
+        public static IJSLogHandler GlobalHandler => _globalHandler;
+
+        /// <summary>
+        /// Installs a global <see cref="IJSLogHandler"/> on <see cref="Debug.unityLogger"/> so that
+        /// every Unity log (including raw <c>Debug.Log</c> and third-party logs) is fanned out to all
+        /// sinks added via <see cref="AddSink"/>. Idempotent: subsequent calls return the existing handler.
+        /// </summary>
+        public static IJSLogHandler InstallGlobalHandler()
+        {
+            if (_globalHandler != null) return _globalHandler;
+
+            var original = Debug.unityLogger.logHandler;
+            // Avoid re-wrapping if somehow we ended up with our own handler already in place.
+            if (original is IJSLogHandler existing)
+            {
+                _globalHandler = existing;
+                return _globalHandler;
+            }
+
+            _globalHandler = new IJSLogHandler(original);
+            Debug.unityLogger.logHandler = _globalHandler;
+            return _globalHandler;
+        }
+
+        /// <summary>
+        /// Restores the original Unity log handler if <see cref="InstallGlobalHandler"/> was called.
+        /// </summary>
+        public static void UninstallGlobalHandler()
+        {
+            if (_globalHandler == null) return;
+            if (Debug.unityLogger.logHandler == _globalHandler)
+                Debug.unityLogger.logHandler = _globalHandler.OriginalHandler;
+            _globalHandler = null;
+        }
+
+        /// <summary>
+        /// Adds an additional <see cref="ILogSink"/>. Installs the global handler if not already installed.
+        /// </summary>
+        public static void AddSink(ILogSink sink)
+        {
+            if (sink == null) return;
+            InstallGlobalHandler().AddSink(sink);
+        }
+
+        /// <summary>Removes a previously added sink. Returns true if it was registered.</summary>
+        public static bool RemoveSink(ILogSink sink) => _globalHandler != null && _globalHandler.RemoveSink(sink);
+
+        /// <summary>Flushes the global handler and all its sinks.</summary>
+        public static void FlushAllSinks() => _globalHandler?.FlushAll();
+
+        // -------- Instance state --------
+
+        private Color _logColor;
+        private readonly bool _isNoOpLogger;
+        private bool _logsEnabled;
+        private string _logPrefix;
+        private LogChannel _channel;
+
+        /// <summary>If true, the editor formatter highlights numeric tokens in red. Defaults to false (zero-alloc).</summary>
+        public bool HighlightNumbers { get; set; }
 
         private IJSLogger(bool logsEnabled)
         {
@@ -280,9 +370,9 @@ namespace com.ijs.logger
         /// <summary>
         /// Creates a logger instance only when <paramref name="logsEnabled"/> is true and <c>USE_LOGS</c> is defined.
         /// Returns a shared no-op logger when either condition is not met.
-        /// Loggers returned in a disabled state cannot be enabled later; create a new logger if you need logging enabled.
         /// </summary>
-        public static IJSLogger Create(string prefix = "", Color? color = null, bool logsEnabled = true, LogChannel channel = LogChannel.Default)
+        public static IJSLogger Create(string prefix = "", Color? color = null, bool logsEnabled = true,
+            LogChannel channel = LogChannel.Default)
         {
             if (!ShouldCreateLogger(logsEnabled))
                 return DisabledLogger;
@@ -292,9 +382,7 @@ namespace com.ijs.logger
 
         private static bool ShouldCreateLogger(bool logsEnabled)
         {
-            if (!logsEnabled)
-                return false;
-
+            if (!logsEnabled) return false;
 #if USE_LOGS
             return true;
 #else
@@ -302,60 +390,50 @@ namespace com.ijs.logger
 #endif
         }
 
-        public IJSLogger(string prefix = "", Color? color = null, bool logsEnabled = true, LogChannel channel = LogChannel.Default)
+        public IJSLogger(string prefix = "", Color? color = null, bool logsEnabled = true,
+            LogChannel channel = LogChannel.Default)
         {
             _logColor = color ?? Color.white;
-            _logPrefix = prefix;
+            _logPrefix = prefix ?? string.Empty;
             _logsEnabled = logsEnabled;
             _channel = channel;
             _isNoOpLogger = false;
         }
 
         /// <summary>
-        /// Attempts to enable logging for this instance.
-        /// Returns <c>false</c> if the logger is a no-op logger or has been disabled, because disabled loggers cannot be re-enabled.
+        /// Enables logging for this instance. Returns <c>false</c> only for the shared no-op logger.
         /// </summary>
         public bool EnableLogs()
         {
-            if (_isNoOpLogger)
-                return false;
-
-            if (_logsEnabled)
-                return true;
-
-            return false;
+            if (_isNoOpLogger) return false;
+            _logsEnabled = true;
+            return true;
         }
 
         /// <summary>
         /// Disables logging for this instance.
-        /// Returns <c>true</c> when the state changes and <c>false</c> when the logger is already disabled.
-        /// For no-op loggers, this method has no effect and returns <c>false</c>.
+        /// Returns <c>true</c> when the state changes and <c>false</c> when the logger is already disabled
+        /// or is the shared no-op logger.
         /// </summary>
         public bool DisableLogs()
         {
             if (_isNoOpLogger) return false;
             if (!_logsEnabled) return false;
-
             _logsEnabled = false;
             return true;
         }
 
-        [Obsolete("Use EnableLogs() or DisableLogs() instead. Disabled loggers cannot be re-enabled after creation.")]
+        [Obsolete("Use EnableLogs() or DisableLogs() instead.")]
         public void ToggleLogs(bool enable)
         {
-            if (enable)
-            {
-                EnableLogs();
-                return;
-            }
-
-            DisableLogs();
+            if (enable) EnableLogs();
+            else DisableLogs();
         }
 
         public void ModifyPrefix(string prefix)
         {
             if (_isNoOpLogger) return;
-            _logPrefix = prefix;
+            _logPrefix = prefix ?? string.Empty;
         }
 
         public void ModifyColor(Color color)
@@ -364,201 +442,305 @@ namespace com.ijs.logger
             _logColor = color;
         }
 
-        /// <summary>
-        /// Asserts a condition and logs an error if it fails.
-        /// </summary>
-        public LogAssert Assert(bool condition, string message)
+        // -------- Assertions / Validation --------
+
+        /// <summary>Asserts a condition and logs an error if it fails.</summary>
+        public LogAssert Assert(bool condition, string message,
+            [CallerFilePath] string callerFilePath = "",
+            [CallerLineNumber] int callerLineNumber = 0,
+            [CallerMemberName] string callerMemberName = "")
         {
-            return new LogAssert(this, condition, message);
+            return new LogAssert(this, condition, message, callerFilePath, callerLineNumber, callerMemberName);
+        }
+
+        public void ValidateNotNull(object obj, string paramName,
+            [CallerFilePath] string callerFilePath = "",
+            [CallerLineNumber] int callerLineNumber = 0,
+            [CallerMemberName] string callerMemberName = "")
+        {
+            Assert(obj != null, $"{paramName} cannot be null", callerFilePath, callerLineNumber, callerMemberName);
+        }
+
+        public void ValidateRange(float value, float min, float max, string paramName,
+            [CallerFilePath] string callerFilePath = "",
+            [CallerLineNumber] int callerLineNumber = 0,
+            [CallerMemberName] string callerMemberName = "")
+        {
+            Assert(value >= min && value <= max,
+                $"{paramName} must be between {min} and {max}, but was {value}",
+                callerFilePath, callerLineNumber, callerMemberName);
+        }
+
+        // -------- Conditional / Throttled logging --------
+
+        /// <summary>Logs a message only if the condition is true.</summary>
+        [Conditional("USE_LOGS")]
+        public void LogIf(bool condition, string message, LogType logType = LogType.Log, GameObject go = null,
+            [CallerFilePath] string callerFilePath = "",
+            [CallerLineNumber] int callerLineNumber = 0,
+            [CallerMemberName] string callerMemberName = "")
+        {
+            if (!_logsEnabled || !condition) return;
+            LogAt(logType, message, go, callerFilePath, callerLineNumber, callerMemberName);
         }
 
         /// <summary>
-        /// Validates that an object is not null.
-        /// </summary>
-        public void ValidateNotNull(object obj, string paramName)
-        {
-            Assert(obj != null, $"{paramName} cannot be null");
-        }
-
-        /// <summary>
-        /// Validates that a value is within a specified range.
-        /// </summary>
-        public void ValidateRange(float value, float min, float max, string paramName)
-        {
-            Assert(value >= min && value <= max, $"{paramName} must be between {min} and {max}, but was {value}");
-        }
-
-        /// <summary>
-        /// Logs a message only if the condition is true.
+        /// Logs a message only if the condition function returns true. Uses lazy evaluation so
+        /// neither the condition nor the message builder runs when logging is disabled.
         /// </summary>
         [Conditional("USE_LOGS")]
-        public void LogIf(bool condition, string message, LogType logType = LogType.Log, GameObject go = null)
+        public void LogIf(Func<bool> condition, Func<string> messageBuilder, LogType logType = LogType.Log,
+            GameObject go = null,
+            [CallerFilePath] string callerFilePath = "",
+            [CallerLineNumber] int callerLineNumber = 0,
+            [CallerMemberName] string callerMemberName = "")
         {
-            if (!_logsEnabled) return;
-            if (condition)
-                PrintLog(message, logType, go);
+            if (!_logsEnabled || condition == null || messageBuilder == null) return;
+            if (!condition()) return;
+            LogAt(logType, messageBuilder(), go, callerFilePath, callerLineNumber, callerMemberName);
         }
 
-        /// <summary>
-        /// Logs a message only if the condition function returns true. Uses lazy evaluation.
-        /// </summary>
+        /// <summary>Logs a message with rate limiting to prevent spam.</summary>
         [Conditional("USE_LOGS")]
-        public void LogIf(Func<bool> condition, Func<string> messageBuilder, LogType logType = LogType.Log, GameObject go = null)
+        public void LogThrottled(string message, float minIntervalSeconds, LogType logType = LogType.Log,
+            GameObject go = null,
+            [CallerFilePath] string callerFilePath = "",
+            [CallerLineNumber] int callerLineNumber = 0,
+            [CallerMemberName] string callerMemberName = "")
         {
             if (!_logsEnabled) return;
-            if (condition())
-                PrintLog(messageBuilder(), logType, go);
+            // Use file+line as the throttle key so the same log statement throttles regardless of
+            // dynamic message content. Falls back to message content if caller info is missing.
+            var key = string.IsNullOrEmpty(callerFilePath)
+                ? $"{GetHashCode()}_{message}"
+                : $"{callerFilePath}:{callerLineNumber}";
+
+            if (!LogRateLimiter.ShouldLog(key, minIntervalSeconds)) return;
+
+            var suppressedCount = LogRateLimiter.GetSuppressedCount(key);
+            var finalMessage = suppressedCount > 0 ? $"{message} (suppressed {suppressedCount}x)" : message;
+            LogAt(logType, finalMessage, go, callerFilePath, callerLineNumber, callerMemberName);
         }
 
-        /// <summary>
-        /// Logs a message with rate limiting to prevent spam.
-        /// </summary>
+        // -------- Core logging entry points --------
+
         [Conditional("USE_LOGS")]
-        public void LogThrottled(string message, float minIntervalSeconds, LogType logType = LogType.Log, GameObject go = null)
+        public void PrintLog(string message, LogType logType = LogType.Log, GameObject go = null,
+            [CallerFilePath] string callerFilePath = "",
+            [CallerLineNumber] int callerLineNumber = 0,
+            [CallerMemberName] string callerMemberName = "")
         {
             if (!_logsEnabled) return;
-            var key = $"{GetHashCode()}_{message}";
-            if (LogRateLimiter.ShouldLog(key, minIntervalSeconds))
-            {
-                var suppressedCount = LogRateLimiter.GetSuppressedCount(key);
-                var finalMessage = suppressedCount > 0
-                    ? $"{message} (suppressed {suppressedCount}x)"
-                    : message;
-                PrintLog(finalMessage, logType, go);
-            }
+            LogAt(logType, message, go, callerFilePath, callerLineNumber, callerMemberName);
         }
 
+        /// <summary>Logs a real exception, preserving the type and stack trace through the pipeline.</summary>
         [Conditional("USE_LOGS")]
-        public void PrintLog(string message, LogType logType = LogType.Log, GameObject go = null)
+        public void PrintException(Exception exception, GameObject go = null,
+            [CallerFilePath] string callerFilePath = "",
+            [CallerLineNumber] int callerLineNumber = 0,
+            [CallerMemberName] string callerMemberName = "")
         {
-            if (!_logsEnabled) return;
-
-            // Check if channel is enabled
+            if (!_logsEnabled || exception == null) return;
+            if (!IsAllowed(LogType.Exception)) return;
             if (!IJSLoggerSettings.IsChannelEnabled(_channel)) return;
 
-            // Add context if any
-            message = LogContext.CurrentContext + message;
+            // Route through Debug.unityLogger so that, when the global handler is installed,
+            // sinks receive the exception too. The global handler's IJSLogHandler.LogException
+            // takes care of console + additional sinks via the captured original handler.
+            Debug.unityLogger.LogException(exception, go);
+        }
 
-            // Add prefix
+        /// <summary>
+        /// Internal entry point that all conditional/public methods funnel through, so caller-info
+        /// from the original call site is preserved.
+        /// </summary>
+        internal void LogAt(LogType logType, string message, GameObject go,
+            string callerFilePath, int callerLineNumber, string callerMemberName)
+        {
+            if (!_logsEnabled) return;
+            if (!IsChannelAllowed(_channel, logType)) return;
+
+            // Add context if any.
+            var contextPrefix = LogContext.CurrentContext;
+            if (!string.IsNullOrEmpty(contextPrefix))
+                message = contextPrefix + message;
+
+            // Add per-logger prefix.
             if (!string.IsNullOrEmpty(_logPrefix))
                 message = $"{_logPrefix}:: {message}";
 
-            Log(message, logType, go, _logColor);
+            var formatted = FormatMessage(message, _logColor, HighlightNumbers, callerFilePath, callerLineNumber);
+
+            EmitToPipeline(logType, _channel, ResolveTag(), formatted, go,
+                callerFilePath, callerLineNumber, callerMemberName);
         }
 
+        private string ResolveTag() => _channel == LogChannel.Default ? null : _channel.ToString();
+
+        private static bool IsAllowed(LogType logType)
+        {
+            var settings = IJSLoggerSettings.Instance;
+            return settings == null || settings.IsLogTypeAllowed(logType);
+        }
+
+        private static bool IsChannelAllowed(LogChannel channel, LogType logType)
+        {
+            if (!IsAllowed(logType)) return false;
+            if (!IJSLoggerSettings.IsChannelEnabled(channel)) return false;
+            var settings = IJSLoggerSettings.Instance;
+            return settings == null || settings.IsChannelLogTypeAllowed(channel, logType);
+        }
+
+        // -------- Static API (kept for backward compat, now routed through the pipeline) --------
+
+        /// <summary>
+        /// Logs a message via the same pipeline as instance loggers (channel filter, sinks, caller-info link).
+        /// Uses <see cref="LogChannel.Default"/>.
+        /// </summary>
         [Conditional("USE_LOGS")]
         public static void Log(
             string message,
             LogType type = LogType.Log,
             GameObject go = null,
-            Color? color = null)
+            Color? color = null,
+            [CallerFilePath] string callerFilePath = "",
+            [CallerLineNumber] int callerLineNumber = 0,
+            [CallerMemberName] string callerMemberName = "")
         {
-            color = color ?? Color.white;
-#if UNITY_EDITOR
-            var splitWords = message.Split();
+            if (!IsChannelAllowed(LogChannel.Default, type)) return;
 
-            for (var i = 0; i < splitWords.Length; i++)
-            {
-                if (int.TryParse(splitWords[i], out _))
-                {
-                    splitWords[i] = $"<size=13><color=#FF214C>{splitWords[i]} </color></size>";
-                }
-            }
+            var contextPrefix = LogContext.CurrentContext;
+            if (!string.IsNullOrEmpty(contextPrefix))
+                message = contextPrefix + message;
 
-            var updatedText = string.Join(" ", splitWords);
-
-            var formattedMessage =
-                $"<size=11><i><b><color=#{(byte)(color.Value.r * 255f):X2}{(byte)(color.Value.g * 255f):X2}{(byte)(color.Value.b * 255f):X2}>{updatedText}</color></b></i></size>";
-
-            switch (type)
-            {
-                case LogType.Error:
-                    Debug.LogError(formattedMessage, go);
-                    break;
-                case LogType.Assert:
-                    Debug.LogAssertion(formattedMessage, go);
-                    break;
-                case LogType.Warning:
-                    Debug.LogWarning(formattedMessage, go);
-                    break;
-                case LogType.Log:
-                    Debug.Log(formattedMessage, go);
-                    break;
-                case LogType.Exception:
-                    Debug.LogException(new Exception(formattedMessage), go);
-                    break;
-            }
-#else
-            var stackTrace = new StackTrace(true);
-            var callerFrames = GetRelevantStackFrames(stackTrace);
-
-            // Get the method two steps back in the call stack, effectively skipping logger methods
-            var firstCallerFrame = callerFrames.ElementAtOrDefault(0);
-            var secondCallerFrame = callerFrames.ElementAtOrDefault(1);
-
-            var firstCallerClassName = firstCallerFrame?.GetMethod()?.DeclaringType?.Name ?? "UnknownClass";
-            var firstCallerMethodName = firstCallerFrame?.GetMethod()?.Name ?? "UnknownMethod";
-
-            var secondCallerClassName = secondCallerFrame?.GetMethod()?.DeclaringType?.Name ?? "UnknownClass";
-            var secondCallerMethodName = secondCallerFrame?.GetMethod()?.Name ?? "UnknownMethod";
-
-            string logMessage = message;
-
-            // Append current class and method only if they are not unknown
-            if (firstCallerClassName != "UnknownClass" && firstCallerMethodName != "UnknownMethod")
-                logMessage += $" ⇒ F: {firstCallerClassName}.{firstCallerMethodName}";
-
-            // Append previous class and method only if they are not unknown
-            if (secondCallerClassName != "UnknownClass" && secondCallerMethodName != "UnknownMethod")
-                logMessage += $", S: {secondCallerClassName}.{secondCallerMethodName}";
-
-            Debug.Log($"\n\n{logMessage}\n");
-#endif
+            var formatted = FormatMessage(message, color ?? Color.white, false, callerFilePath, callerLineNumber);
+            EmitToPipeline(type, LogChannel.Default, null, formatted, go,
+                callerFilePath, callerLineNumber, callerMemberName);
         }
 
+        // -------- Formatting & emission --------
 
-        private static List<StackFrame> GetRelevantStackFrames(StackTrace stackTrace)
+        private static string FormatMessage(string message, Color color, bool highlightNumbers,
+            string callerFilePath, int callerLineNumber)
         {
-            var frames = new List<StackFrame>();
-            for (var i = 0; i < stackTrace.FrameCount; i++)
+#if UNITY_EDITOR
+            var body = highlightNumbers ? HighlightNumericTokens(message) : message;
+            var hex = $"{(byte)(color.r * 255f):X2}{(byte)(color.g * 255f):X2}{(byte)(color.b * 255f):X2}";
+            var formatted = $"<size=11><i><b><color=#{hex}>{body}</color></b></i></size>";
+#else
+            var formatted = message;
+#endif
+            // Append a Unity-recognized link line so the console double-click jumps back to
+            // the original call site (instead of into IJSLogger.cs).
+            if (!string.IsNullOrEmpty(callerFilePath))
             {
-                var frame = stackTrace.GetFrame(i);
-                var methodName = frame?.GetMethod()?.Name;
-                var className = frame?.GetMethod()?.DeclaringType?.Name;
-                if (methodName != "MoveNext"
-                    && methodName != "InvokeMoveNext"
-                    && !(methodName == "Start" && className == "AsyncVoidMethodBuilder")
-                    && methodName != "PrintLog"
-                    && methodName != "RunInternal"
-                    && methodName != "InvokeAction"
-                    && methodName != "FinishContinuations"
-                    && methodName != "Invoke"
-                    && methodName != "ExecuteTasks"
-                    && methodName != "RunCallback"
-                    && methodName != "Exec"
-                    && !(className?.StartsWith("AsyncTaskMethodBuilder") ?? false)
-                    && !(className == "ExecutionContext" && methodName == "Run")
-                    && !(className == "SynchronizationContextAwaitTaskContinuation" && methodName == "Run")
-                    && !(className == "AwaitTaskContinuation" && methodName == "InvokeAction")
-                    && !(className == "MoveNextRunner" && methodName == "Run")
-                    && className != "IJSLogger"
-                    && className != "Tween"
-                    && className != "Clickable"
-                    && className != "TaskCompletionSource"
-                    && className != "TweenManager"
-                    && className != "UnitySynchronizationContext"
-                    && className != "Task"
-                    && className != "InternalEditorUtility"
-                    && className != "DOTweenComponent"
-                    && className != "Socket"
-                    && className != "Task`1"
-                    && className != "<>c"
-                    && !(className == "WorkRequest" && methodName == "Invoke")) // Ignore specific methods and classes
+                var rel = ToRelativeAssetPath(callerFilePath);
+                formatted += $"\n(at {rel}:{callerLineNumber})";
+            }
+            return formatted;
+        }
+
+        private static string ToRelativeAssetPath(string fullPath)
+        {
+            if (string.IsNullOrEmpty(fullPath)) return fullPath;
+            var normalized = fullPath.Replace('\\', '/');
+
+            // Try to make the path relative to the project root (parent of "Assets").
+            string projectRoot = null;
+            try
+            {
+                if (!string.IsNullOrEmpty(Application.dataPath))
                 {
-                    frames.Add(frame);
+                    var dataPath = Application.dataPath.Replace('\\', '/');
+                    if (dataPath.EndsWith("/Assets", StringComparison.Ordinal))
+                        projectRoot = dataPath.Substring(0, dataPath.Length - "Assets".Length);
                 }
             }
-            return frames;
+            catch
+            {
+                // Application.dataPath is main-thread only in some Unity versions.
+            }
+
+            if (!string.IsNullOrEmpty(projectRoot) &&
+                normalized.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return normalized.Substring(projectRoot.Length);
+            }
+
+            // Fallback: trim everything up to and including the last "/Assets/" or "/Packages/" segment.
+            var assetsIdx = normalized.LastIndexOf("/Assets/", StringComparison.OrdinalIgnoreCase);
+            if (assetsIdx >= 0) return normalized.Substring(assetsIdx + 1);
+            var pkgIdx = normalized.LastIndexOf("/Packages/", StringComparison.OrdinalIgnoreCase);
+            if (pkgIdx >= 0) return normalized.Substring(pkgIdx + 1);
+
+            return normalized;
+        }
+
+#if UNITY_EDITOR
+        private static string HighlightNumericTokens(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return message;
+
+            // Single-pass scan: wrap maximal runs of digits (with optional surrounding sign/dot)
+            // with the highlight tags. Avoids splitting/joining the entire string per word.
+            var sb = new System.Text.StringBuilder(message.Length + 32);
+            var i = 0;
+            while (i < message.Length)
+            {
+                var c = message[i];
+                if (char.IsDigit(c))
+                {
+                    var start = i;
+                    while (i < message.Length && (char.IsDigit(message[i]) || message[i] == '.'))
+                        i++;
+                    // Only highlight if the run is not adjacent to letters (avoid mangling identifiers like a1b2).
+                    var prevOk = start == 0 || !char.IsLetter(message[start - 1]);
+                    var nextOk = i == message.Length || !char.IsLetter(message[i]);
+                    if (prevOk && nextOk)
+                    {
+                        sb.Append("<size=13><color=#FF214C>");
+                        sb.Append(message, start, i - start);
+                        sb.Append("</color></size>");
+                    }
+                    else
+                    {
+                        sb.Append(message, start, i - start);
+                    }
+                }
+                else
+                {
+                    sb.Append(c);
+                    i++;
+                }
+            }
+            return sb.ToString();
+        }
+#endif
+
+        private static void EmitToPipeline(LogType logType, LogChannel channel, string tag,
+            string formattedMessage, Object context,
+            string callerFilePath, int callerLineNumber, string callerMemberName)
+        {
+            // If a global handler is installed it will receive this log via Debug.unityLogger
+            // and dispatch to all sinks itself. Use the tag overload so the channel name appears
+            // as Unity's [Tag] in the console and benefits from Unity's filtering UI.
+            var unityLogger = Debug.unityLogger;
+
+            if (logType == LogType.Exception)
+            {
+                unityLogger.LogException(new Exception(formattedMessage), context);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(tag))
+                unityLogger.Log(logType, (object)tag, formattedMessage, context);
+            else
+                unityLogger.Log(logType, (object)formattedMessage, context);
+
+            // If no global handler is installed but additional sinks were added, we still want
+            // them to receive entries originating from instance loggers. Currently AddSink always
+            // installs the global handler, so this branch is intentionally left empty.
         }
     }
 }

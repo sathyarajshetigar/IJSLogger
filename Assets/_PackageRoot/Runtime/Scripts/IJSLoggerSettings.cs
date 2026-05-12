@@ -14,12 +14,16 @@ namespace com.ijs.logger
         public LogChannel channel;
         public ChannelScope scope = ChannelScope.Both;
         public bool enabled = true;
+        [Tooltip("Minimum log severity allowed for this channel. Logs below this level are suppressed even if the channel is enabled.")]
+        public LogType minLogType = LogType.Log;
 
-        public ChannelConfig(LogChannel channel, ChannelScope scope = ChannelScope.Both, bool enabled = true)
+        public ChannelConfig(LogChannel channel, ChannelScope scope = ChannelScope.Both, bool enabled = true,
+            LogType minLogType = LogType.Log)
         {
             this.channel = channel;
             this.scope = scope;
             this.enabled = enabled;
+            this.minLogType = minLogType;
         }
     }
 
@@ -39,6 +43,13 @@ namespace com.ijs.logger
 
         [Tooltip("Default rate limit in seconds")]
         [SerializeField] private float defaultRateLimitSeconds = 0.1f;
+
+        [Header("Global Filtering")]
+        [Tooltip("Master switch. When false, all logs from this system are suppressed and Debug.unityLogger.logEnabled is set to false on Apply.")]
+        [SerializeField] private bool logsEnabled = true;
+
+        [Tooltip("Minimum severity for any log to be emitted. Maps to Debug.unityLogger.filterLogType on Apply.")]
+        [SerializeField] private LogType globalMinLogType = LogType.Log;
 
         private static IJSLoggerSettings _instance;
         private static bool _instanceSearched;
@@ -164,5 +175,81 @@ namespace com.ijs.logger
 
         public bool EnableRateLimiting => enableRateLimiting;
         public float DefaultRateLimitSeconds => defaultRateLimitSeconds;
+
+        /// <summary>Master logging switch.</summary>
+        public bool LogsEnabled
+        {
+            get => logsEnabled;
+            set { logsEnabled = value; ApplyToUnityLogger(); }
+        }
+
+        /// <summary>Minimum severity for any log to be emitted.</summary>
+        public LogType GlobalMinLogType
+        {
+            get => globalMinLogType;
+            set { globalMinLogType = value; ApplyToUnityLogger(); }
+        }
+
+        /// <summary>
+        /// Returns true if logs of <paramref name="logType"/> should be allowed by the global filter.
+        /// </summary>
+        public bool IsLogTypeAllowed(LogType logType)
+        {
+            if (!logsEnabled) return false;
+            return IsAtLeast(logType, globalMinLogType);
+        }
+
+        /// <summary>
+        /// Static convenience wrapper used by <see cref="IJSLogger"/>: returns true if no settings instance exists.
+        /// </summary>
+        public static bool IsLogTypeAllowedGlobal(LogType logType)
+        {
+            var i = Instance;
+            return i == null || i.IsLogTypeAllowed(logType);
+        }
+
+        /// <summary>
+        /// Returns true if a log of <paramref name="logType"/> on <paramref name="channel"/>
+        /// satisfies the channel's per-severity filter.
+        /// </summary>
+        public bool IsChannelLogTypeAllowed(LogChannel channel, LogType logType)
+        {
+            if (channel == LogChannel.Default) return true;
+            var config = channelConfigs.FirstOrDefault(c => c.channel == channel);
+            if (config == null) return true;
+            return IsAtLeast(logType, config.minLogType);
+        }
+
+        /// <summary>Applies <see cref="LogsEnabled"/> and <see cref="GlobalMinLogType"/> to <c>Debug.unityLogger</c>.</summary>
+        public void ApplyToUnityLogger()
+        {
+            try
+            {
+                Debug.unityLogger.logEnabled = logsEnabled;
+                Debug.unityLogger.filterLogType = globalMinLogType;
+            }
+            catch
+            {
+                // Debug.unityLogger may not be available outside the player loop in some contexts.
+            }
+        }
+
+        // LogType ordering (most-severe first): Exception > Error > Assert > Warning > Log.
+        // We treat anything at-or-above the configured min as allowed.
+        private static int Severity(LogType t)
+        {
+            switch (t)
+            {
+                case LogType.Log: return 0;
+                case LogType.Warning: return 1;
+                case LogType.Assert: return 2;
+                case LogType.Error: return 3;
+                case LogType.Exception: return 4;
+                default: return 0;
+            }
+        }
+
+        private static bool IsAtLeast(LogType actual, LogType minimum) =>
+            Severity(actual) >= Severity(minimum);
     }
 }

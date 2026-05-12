@@ -9,6 +9,61 @@ Select "Add package from git URL" in Unity Package Manager and paste:
 https://github.com/sathyarajshetigar/IJSLogger.git#upm
 ```
 
+## What's New in v1.2.0
+
+Improvements inspired by *"Unity's Logger Does More Than You Think"* (Gamedev Engine Room):
+
+### 🔗 Clickable Console Logs (Caller Info)
+Every log now appends a `(at path:line)` link pointing back to the **call site** instead of `IJSLogger.cs`.
+Powered by `[CallerFilePath]` / `[CallerLineNumber]` attributes — zero runtime cost, no `StackTrace` walking.
+Double-click any log in the Unity console to jump to the line that produced it.
+
+### 🪝 Global Handler — Capture Every Log
+```csharp
+IJSLogger.InstallGlobalHandler();
+```
+Routes **every** log going through `Debug.unityLogger` (raw `Debug.Log`, third-party packages,
+internal Unity logs) through the IJSLogger pipeline so they hit your channel filter, rate limiter
+and any registered sinks.
+
+### 🔌 Pluggable Sinks (`ILogSink`)
+Fan logs out to multiple destinations. Built-in:
+- `UnityConsoleSink` — default, writes via the original Unity handler.
+- `FileLogSink` — size-based rolling file sink, thread-safe, ideal for shipped builds.
+
+```csharp
+IJSLogger.AddSink(new FileLogSink(
+    Path.Combine(Application.persistentDataPath, "Logs", "game.log"),
+    maxFileSizeBytes: 5 * 1024 * 1024,
+    maxRolledFiles: 5));
+```
+
+### 🎚️ Severity Filtering
+- **Global** `LogsEnabled` and `GlobalMinLogType` on `IJSLoggerSettings` apply to `Debug.unityLogger.logEnabled` / `filterLogType`.
+- **Per-channel** `minLogType` on `ChannelConfig` — e.g. set `Performance` to `Warning` and above.
+
+### 🏷️ Channel Tag Overload
+Logs use `Debug.unityLogger.Log(LogType, tag, message)` so the channel name appears as Unity's
+native `[Tag]`, benefiting from Unity's built-in console filter UI.
+
+### 🧨 Real Exception Logging
+```csharp
+try { ... }
+catch (Exception ex) { _logger.PrintException(ex); }
+```
+Routes through `ILogHandler.LogException` so the exception type and stack trace are preserved
+end-to-end (instead of being flattened into a string).
+
+### 🔒 Thread-Safe State
+- `LogContext` now uses `AsyncLocal<Stack<string>>` — flows across `await` and is isolated per logical thread.
+- `LogRateLimiter` uses a `ConcurrentDictionary` with a soft-LRU bound (`MaxEntries` / `TrimTo`)
+  so the cache no longer grows unbounded.
+
+### ⚡ Zero-Alloc Hot Paths
+- The "highlight numbers" feature is now **opt-in** (`logger.HighlightNumbers = true`) and uses
+  a single-pass `StringBuilder` scan instead of `string.Split` + per-word `int.TryParse`.
+- `EnableLogs()` is now actually implemented (previously a no-op).
+
 ## What's New in v1.1.0
 
 ### 🎯 Channel-Based Filtering

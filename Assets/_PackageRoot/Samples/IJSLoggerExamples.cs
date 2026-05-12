@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using com.ijs.logger;
 
@@ -138,6 +139,39 @@ public class IJSLoggerExamples : MonoBehaviour
             () => $"Debug Info - Health: {health}, Enemies: {enemyCount}, Position: {transform.position}",
             LogType.Log
         );
+    }
+
+    /// <summary>
+    /// Demonstrates the new exception logging API which preserves the real exception
+    /// object (and its stack trace) all the way through the pipeline.
+    /// </summary>
+    private void DemoExceptionLogging()
+    {
+        try
+        {
+            throw new InvalidOperationException("Something broke");
+        }
+        catch (Exception ex)
+        {
+            _gameplayLogger.PrintException(ex);
+        }
+    }
+
+    /// <summary>
+    /// Demonstrates installing the global ILogHandler so that every Unity log
+    /// (including raw Debug.Log calls and third-party packages) is routed through
+    /// the IJSLogger pipeline and fanned out to all registered sinks. Also installs
+    /// a rolling file sink for persistent log capture in shipped builds.
+    /// </summary>
+    private void DemoGlobalHandlerAndFileSink()
+    {
+        // Capture every log in the project, not just IJSLogger calls.
+        IJSLogger.InstallGlobalHandler();
+
+        // Persist logs to a rotating file (5 MiB per file, 5 rolled files retained).
+        var fileSink = new FileLogSink(
+            System.IO.Path.Combine(Application.persistentDataPath, "Logs", "game.log"));
+        IJSLogger.AddSink(fileSink);
     }
 
     /// <summary>
