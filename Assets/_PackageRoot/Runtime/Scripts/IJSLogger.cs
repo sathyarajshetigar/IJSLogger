@@ -733,6 +733,9 @@ namespace com.ijs.logger
                 return;
             }
 
+            // Cast disambiguates the overload: ILogger has both Log(LogType, object, ...) and
+            // Log(LogType, object, object, ...). The (object) cast keeps the tag overload selected
+            // even if `tag` is null in the future or when callers pass a string literal.
             if (!string.IsNullOrEmpty(tag))
                 unityLogger.Log(logType, (object)tag, formattedMessage, context);
             else

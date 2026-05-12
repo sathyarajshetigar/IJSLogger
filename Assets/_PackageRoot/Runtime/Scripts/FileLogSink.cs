@@ -90,12 +90,15 @@ namespace com.ijs.logger
             }
 
             var line = sb.ToString();
+            // Use byte count, not character count, so rotation triggers correctly
+            // for messages containing multi-byte UTF-8 characters.
+            var bytes = Encoding.UTF8.GetByteCount(line) + Environment.NewLine.Length;
 
             lock (_gate)
             {
                 if (_writer == null) return;
                 _writer.WriteLine(line);
-                _currentSize += line.Length + Environment.NewLine.Length;
+                _currentSize += bytes;
                 if (_currentSize >= _maxFileSizeBytes)
                     Rotate();
             }

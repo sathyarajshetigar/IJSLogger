@@ -90,7 +90,7 @@ namespace com.ijs.logger
             if (instance == null)
                 return true; // If no settings, allow all channels
 
-            var config = instance.channelConfigs.FirstOrDefault(c => c.channel == channel);
+            var config = instance.FindConfig(channel);
             if (config == null)
                 return true; // If channel not configured, default to enabled
 
@@ -110,7 +110,22 @@ namespace com.ijs.logger
         /// </summary>
         public ChannelConfig GetChannelConfig(LogChannel channel)
         {
-            return channelConfigs.FirstOrDefault(c => c.channel == channel);
+            return FindConfig(channel);
+        }
+
+        // Hot-path lookup — avoids LINQ allocations on every log call. The list is tiny
+        // (at most one entry per LogChannel) so a manual scan is faster than building/maintaining
+        // a separate dictionary that would also need invalidation across serialization changes.
+        private ChannelConfig FindConfig(LogChannel channel)
+        {
+            var list = channelConfigs;
+            if (list == null) return null;
+            for (var i = 0; i < list.Count; i++)
+            {
+                if (list[i] != null && list[i].channel == channel)
+                    return list[i];
+            }
+            return null;
         }
 
         /// <summary>
@@ -215,7 +230,7 @@ namespace com.ijs.logger
         public bool IsChannelLogTypeAllowed(LogChannel channel, LogType logType)
         {
             if (channel == LogChannel.Default) return true;
-            var config = channelConfigs.FirstOrDefault(c => c.channel == channel);
+            var config = FindConfig(channel);
             if (config == null) return true;
             return IsAtLeast(logType, config.minLogType);
         }
