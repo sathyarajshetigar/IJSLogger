@@ -5,7 +5,7 @@ namespace com.ijs.logger
     /// <summary>
     /// User-defined log channel, declared as a <see cref="ScriptableObject"/> asset.
     /// Lets projects add or update channels without modifying the built-in <see cref="LogChannel"/>
-    /// enum: create one of these via <c>Assets &#8594; Create &#8594; IJS &#8594; Log Channel</c>,
+    /// enum: create one of these via <c>Assets -> Create -> IJS -> Log Channel</c>,
     /// then either reference it directly or pass <see cref="Id"/> to the string-channel overloads
     /// of <see cref="IJSLogger.Create(string,Color?,bool,string)"/>.
     /// </summary>

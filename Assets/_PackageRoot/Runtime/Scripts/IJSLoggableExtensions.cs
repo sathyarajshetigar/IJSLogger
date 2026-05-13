@@ -9,7 +9,7 @@ namespace com.ijs.logger
     /// Extension methods that give any <see cref="IIJSLoggable"/> instance a per-type logger
     /// without requiring the consumer to declare an <see cref="IJSLogger"/> field on every class.
     /// All methods are <c>[Conditional("USE_LOGS")]</c>, so calls disappear in builds that don't
-    /// define <c>USE_LOGS</c> &#8212; matching the cost profile of <see cref="IJSLogger"/>'s own API.
+    /// define <c>USE_LOGS</c> -- matching the cost profile of <see cref="IJSLogger"/>'s own API.
     /// </summary>
     public static class IJSLoggableExtensions
     {

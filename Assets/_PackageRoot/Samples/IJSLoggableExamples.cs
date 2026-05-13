@@ -28,7 +28,7 @@ public class IJSLoggableAudioExample : MonoBehaviour, IIJSLoggable
 /// <summary>
 /// Same pattern, but using a custom string-keyed channel registered via a
 /// <see cref="LogChannelAsset"/> (see Quick Start &gt; Custom Channels in the README).
-/// The id is just a string &#8212; users can add as many as they like without modifying
+/// The id is just a string -- users can add as many as they like without modifying
 /// the built-in <see cref="LogChannel"/> enum.
 /// </summary>
 [LogConfig(prefix = "Telemetry", channelId = "Telemetry", colorHex = "#7CB7FF")]

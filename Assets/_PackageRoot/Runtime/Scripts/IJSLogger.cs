@@ -383,9 +383,10 @@ namespace com.ijs.logger
         }
 
         /// <summary>
-        /// String-keyed overload of <see cref="Create(string,Color?,bool,LogChannel)"/>: creates a logger
-        /// for a custom channel identified by <paramref name="channelId"/> (e.g. matching a
-        /// <see cref="LogChannelAsset"/>). The id is used as the Unity console tag and for filter lookup.
+        /// Creates a logger instance only when <paramref name="logsEnabled"/> is true and <c>USE_LOGS</c> is defined.
+        /// Returns a shared no-op logger when either condition is not met.
+        /// String-keyed overload: <paramref name="channelId"/> is used as the Unity console tag and
+        /// for filter lookup against custom channels registered with <see cref="IJSLoggerSettings"/>.
         /// </summary>
         public static IJSLogger Create(string prefix, Color? color, bool logsEnabled, string channelId)
         {
