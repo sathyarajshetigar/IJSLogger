@@ -9,6 +9,52 @@ Select "Add package from git URL" in Unity Package Manager and paste:
 https://github.com/sathyarajshetigar/IJSLogger.git#upm
 ```
 
+## What's New in v1.3.0
+
+### 🧩 Extensible Channels — `LogChannelAsset`
+The built-in `LogChannel` enum is no longer the only way to define channels. Create as many
+project-specific channels as you need without editing package source — just right-click in the
+Project window and pick **Create → IJS → Log Channel**:
+
+```csharp
+// Use the asset directly:
+private readonly IJSLogger _replay = IJSLogger.Create(myReplayChannelAsset);
+
+// Or just use a string id (matches LogChannelAsset.Id):
+private readonly IJSLogger _replay = IJSLogger.Create("Replay", Color.cyan, true, channelId: "Replay");
+```
+
+The id is used as the Unity console `[Tag]`, so Unity's native tag filter and the IJSLogger
+**Log Viewer** window both pick it up. Drop the asset into the **Custom Channels** list on
+your `IJSLoggerSettings` asset (or call `IJSLoggerSettings.RegisterCustomChannel(asset)` at
+startup) to make it appear in the Settings window with the same enabled/scope/min-severity
+controls as the built-in channels.
+
+### 🪪 No More Per-Class Boilerplate — `IIJSLoggable`
+Tired of declaring `private static readonly IJSLogger Log = IJSLogger.Create(...)` (and the
+matching `logsEnabled`/color/prefix fields) on every class — and forgetting one? Add the
+`IIJSLoggable` marker interface and an optional `[LogConfig]` attribute, and call the
+`this.Log(...)` extension methods directly:
+
+```csharp
+[LogConfig(prefix = "Audio", channel = LogChannel.Audio, colorHex = "#FFD000")]
+public class AudioMixer : MonoBehaviour, IIJSLoggable
+{
+    void Play()
+    {
+        this.Log("playing");                   // no fields, no Create call
+        this.LogWarning("mixer hot");
+        this.LogThrottled("polling", 1.0f);
+        this.Assert(volume >= 0, "negative volume");
+    }
+}
+```
+
+`IJSLoggerRegistry` caches one `IJSLogger` per `Type` (concurrent dictionary), reads the
+attribute once via reflection, and reuses the instance for every call. All extension methods
+are `[Conditional("USE_LOGS")]`, so calls disappear in production exactly like the rest of
+the API.
+
 ## What's New in v1.2.0
 
 Improvements inspired by *"Unity's Logger Does More Than You Think"* (Gamedev Engine Room):
@@ -426,7 +472,7 @@ public class AdvancedExample : MonoBehaviour
 
 ## Channel System
 
-### Available Channels
+### Built-in Channels
 
 | Channel | Description | Default Scope |
 |---------|-------------|---------------|
@@ -443,6 +489,48 @@ public class AdvancedExample : MonoBehaviour
 | `Rendering` | Rendering system logs | Both |
 | `System` | General system logs | Both |
 
+### Adding / Updating Channels
+
+You have three options, in increasing order of integration:
+
+**1. String id (lowest friction)** — pass any string to the `channelId` overloads. The id is
+used as the Unity console tag and as the lookup key for filter configs.
+
+```csharp
+var logger = IJSLogger.Create("Replay", Color.cyan, true, channelId: "Replay");
+logger.PrintLog("buffer flushed");
+```
+
+Configure it from code at startup:
+
+```csharp
+var settings = IJSLoggerSettings.Instance;
+settings.SetChannelEnabled("Replay", true);
+settings.SetChannelScope("Replay", ChannelScope.Both);
+```
+
+**2. `LogChannelAsset` (recommended)** — create a ScriptableObject that carries the id,
+default color, scope and minimum severity. Right-click in the Project window →
+**Create → IJS → Log Channel**, name it (the asset name becomes the default `Id`), tweak
+the color/scope/min-severity in the inspector, then either:
+
+- Drag the asset into the **Custom Channels** list on your `IJSLoggerSettings` asset, or
+- Call `IJSLoggerSettings.Instance.RegisterCustomChannel(myAsset)` at startup.
+
+It will then appear in **Window → IJS Logger → Settings** alongside the built-in channels.
+Construct loggers from it directly:
+
+```csharp
+[SerializeField] private LogChannelAsset replayChannel;
+private IJSLogger _replay;
+
+void Awake() => _replay = IJSLogger.Create(replayChannel);
+```
+
+**3. Extending the `LogChannel` enum** — only do this if you're forking the package. Adding
+a value to the enum requires a recompile, breaks asset reordering (Unity stores enum values
+as ints), and is generally inferior to the string-keyed approach above.
+
 ### Channel Scopes
 
 - **Editor Only**: Logs only in Unity Editor (not in builds)
@@ -453,7 +541,7 @@ public class AdvancedExample : MonoBehaviour
 
 **In Editor:**
 1. Open `Window → IJS Logger → Settings`
-2. Enable/disable channels
+2. Enable/disable channels (built-in and custom)
 3. Set channel scope for each
 4. Use quick actions (Enable All, Disable All, Reset)
 
@@ -462,7 +550,119 @@ public class AdvancedExample : MonoBehaviour
 var settings = IJSLoggerSettings.Instance;
 settings.SetChannelEnabled(LogChannel.Performance, true);
 settings.SetChannelScope(LogChannel.Performance, ChannelScope.EditorOnly);
+
+// Same API for custom string-keyed channels:
+settings.SetChannelEnabled("Replay", false);
 ```
+
+## Per-Class Logging via `IIJSLoggable`
+
+The most common reason logs go missing is that someone forgot to declare the
+`private readonly IJSLogger _log = IJSLogger.Create(...)` field on a new class. The
+`IIJSLoggable` marker interface eliminates that boilerplate entirely.
+
+**Step 1.** Mark the class and (optionally) annotate it with `[LogConfig]`:
+
+```csharp
+[LogConfig(prefix = "Audio", channel = LogChannel.Audio, colorHex = "#FFD000")]
+public class AudioMixer : MonoBehaviour, IIJSLoggable { }
+
+// Custom channel id instead of the enum:
+[LogConfig(prefix = "Telemetry", channelId = "Telemetry", colorHex = "#7CB7FF")]
+public class TelemetryUploader : MonoBehaviour, IIJSLoggable { }
+
+// Attribute is optional. Without it, the prefix defaults to the type name and
+// the channel defaults to LogChannel.Default.
+public class HudController : MonoBehaviour, IIJSLoggable { }
+```
+
+**Step 2.** Call the extension methods on `this`:
+
+```csharp
+this.Log("started");
+this.LogWarning("almost out of memory");
+this.LogError("payload was null");
+this.LogException(ex);
+this.LogIf(() => debugMode, () => $"stats {Heavy()}");
+this.LogThrottled("frame info", 1.0f);
+this.Assert(health > 0, "health must be positive").OnFailure(() => health = 0);
+```
+
+How it works: `IJSLoggerRegistry` keeps a `ConcurrentDictionary<Type, IJSLogger>`. The first
+call for a given type reads the attribute via reflection and constructs a logger; every
+subsequent call is a dictionary lookup. The extension methods are `[Conditional("USE_LOGS")]`,
+so the call sites — including `this` and any boxed argument expressions — are stripped at
+compile time when `USE_LOGS` isn't defined.
+
+`[LogConfig]` properties:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `prefix` | type name | Prepended to every message (`"Audio:: ..."`). |
+| `colorHex` | `"#FFFFFF"` | Editor color, e.g. `"#FFD000"` or `"#FFD000FF"`. |
+| `channel` | `LogChannel.Default` | Built-in enum channel. |
+| `channelId` | `null` | Custom string channel id. Wins over `channel` when set. |
+| `logsEnabled` | `true` | Initial enabled state for the type's logger. |
+| `highlightNumbers` | `false` | Mirrors `IJSLogger.HighlightNumbers`. |
+
+If you need a per-instance override (e.g. two instances of the same type with different
+colors), keep using the explicit `IJSLogger.Create(...)` field for those — `IIJSLoggable`
+is type-scoped on purpose.
+
+## Filtering Logs on Mobile Devices
+
+Mobile builds need a slightly different toolkit because there's no Unity console attached.
+IJSLogger supports four complementary patterns:
+
+**1. Strip everything in shipping builds.** When `USE_LOGS` isn't defined, every IJSLogger
+call (including the `IIJSLoggable` extensions) is removed by the C# compiler via
+`[Conditional("USE_LOGS")]`. Disable the define from **IJS → Logger → Disable Logs** before
+producing release builds and there is literally zero log code on the device.
+
+**2. Filter at runtime via `IJSLoggerSettings`.** For QA / TestFlight / internal builds keep
+`USE_LOGS` defined but raise the bar:
+
+```csharp
+var s = IJSLoggerSettings.Instance;
+s.GlobalMinLogType = LogType.Warning;   // suppress info-level globally
+s.SetChannelEnabled("Telemetry", false);
+s.SetChannelScope(LogChannel.Performance, ChannelScope.EditorOnly);
+s.LogsEnabled = false;                  // master kill switch
+```
+
+These can be driven by remote config so you can toggle logs on a live build without
+shipping a new binary.
+
+**3. Persist to a file with `FileLogSink`.** Mobile devices are headless: instead of a
+console, dump everything to `Application.persistentDataPath` and pull it later via
+`adb pull` (Android), Xcode → *Devices and Simulators* → *Download Container* (iOS), or
+via your in-app "Send logs" button:
+
+```csharp
+void Awake()
+{
+    IJSLogger.InstallGlobalHandler();   // captures Debug.Log + 3rd-party logs too
+    IJSLogger.AddSink(new FileLogSink(
+        System.IO.Path.Combine(Application.persistentDataPath, "Logs", "game.log"),
+        maxFileSizeBytes: 5 * 1024 * 1024,
+        maxRolledFiles: 5));
+}
+```
+
+Pair it with the channel filter above to keep the file size manageable. The sink is
+thread-safe and rolls files over at the size threshold.
+
+**4. Read the platform log stream.** When the device is tethered to a developer machine,
+Unity's normal log pipeline is exposed by the OS:
+
+- **Android:** `adb logcat -s Unity` (or filter by tag, e.g. `adb logcat Unity:V Audio:V *:S`).
+  Channel ids and `LogChannel` names appear as the Unity tag, so `adb logcat Unity:S Replay:V`
+  shows only logs from the `Replay` channel.
+- **iOS:** open Xcode → *Devices and Simulators* → *Open Console*, or use macOS Console.app
+  and filter by your app's process; Unity's logs and the IJSLogger tags show up there.
+- **In-game overlay:** add a tiny custom `ILogSink` that pushes entries into a ring buffer
+  and renders them via IMGUI / UI Toolkit. Combined with `IJSLogger.InstallGlobalHandler()`
+  this catches every log the engine produces.
 
 ## Key Features
 
@@ -592,15 +792,31 @@ This hierarchy allows fine-grained control:
 
 ## API Reference
 
-### IJSLogger Constructor
+### IJSLogger Constructor / Factory
 ```csharp
-IJSLogger(
-    string prefix = "",
-    Color? color = null,
-    bool logsEnabled = true,
-    LogChannel channel = LogChannel.Default
-)
+// Built-in enum channel (existing API):
+IJSLogger.Create(string prefix = "", Color? color = null, bool logsEnabled = true,
+                 LogChannel channel = LogChannel.Default);
+
+// Custom string-keyed channel (v1.3+):
+IJSLogger.Create(string prefix, Color? color, bool logsEnabled, string channelId);
+
+// Or derive everything from a LogChannelAsset (v1.3+):
+IJSLogger.Create(LogChannelAsset asset, string prefix = null, bool? logsEnabled = null);
 ```
+
+### IIJSLoggable Extension Methods (v1.3+)
+
+Available on any class that implements `IIJSLoggable`:
+
+| Method | Description |
+|--------|-------------|
+| `this.Log(message)` | Info log via the type's cached logger |
+| `this.LogWarning(message)` / `this.LogError(message)` | Severity shortcuts |
+| `this.LogException(ex)` | Routes through `IJSLogger.PrintException` |
+| `this.LogIf(cond, message, type)` / `this.LogIf(cond, builder, type)` | Conditional / lazy variants |
+| `this.LogThrottled(message, seconds, type)` | Rate-limited |
+| `this.Assert(condition, message)` | Returns the same fluent `LogAssert` |
 
 ### Instance Methods
 
@@ -778,7 +994,26 @@ var logger = IJSLogger.Create("MyClass", Color.cyan, true, LogChannel.Gameplay);
 
 ## Changelog
 
-### Version 1.1.0 (Current)
+### Version 1.3.0 (Current)
+- ✨ Added `LogChannelAsset` ScriptableObject so projects can add channels without editing the enum
+- ✨ Added string-keyed channel overloads to `IJSLogger.Create` and `IJSLoggerSettings` (`SetChannelEnabled`/`SetChannelScope`/`IsChannelEnabled`/`IsChannelLogTypeAllowed`)
+- ✨ Added `IIJSLoggable` marker interface, `[LogConfig]` attribute, and `IJSLoggerRegistry` per-type cache to remove per-class logger boilerplate
+- ✨ Added `this.Log/LogWarning/LogError/LogException/LogIf/LogThrottled/Assert` extension methods (all `[Conditional("USE_LOGS")]`)
+- ✨ Settings window now lists registered `LogChannelAsset`s alongside built-in channels
+- 📚 README: documented extending channels, the `IIJSLoggable` pattern, and how to filter logs on mobile devices
+- 🔧 Backwards compatible: existing enum-channel API and per-class `IJSLogger` fields keep working unchanged
+
+### Version 1.2.0
+- 🔗 Clickable console logs via caller-info attributes (jump back to call site)
+- 🪝 Global ILogHandler installation captures every log (including raw `Debug.Log` and 3rd-party)
+- 🔌 Pluggable `ILogSink` abstraction with built-in `UnityConsoleSink` and rolling `FileLogSink`
+- 🎚️ Per-channel `minLogType` and global `LogsEnabled` / `GlobalMinLogType`
+- 🏷️ Channel name now emitted as Unity's native `[Tag]` for built-in console filtering
+- 🧨 Real exception logging via `PrintException` (preserves type and stack trace)
+- 🔒 `LogContext` uses `AsyncLocal` (flows across `await`); `LogRateLimiter` bounded by soft-LRU
+- ⚡ Highlight-numbers feature is opt-in and zero-alloc; `EnableLogs()` actually works
+
+### Version 1.1.0
 - ✨ Added channel-based filtering system with 12 predefined channels
 - ✨ Added ChannelScope support (EditorOnly, BuildOnly, Both)
 - ✨ Added smart rate limiting with suppression counting

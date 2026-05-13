@@ -165,6 +165,26 @@ namespace com.ijs.logger
                 DrawChannelRow(channel);
             }
 
+            // -------- Custom string-keyed channels (LogChannelAsset) --------
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Custom Channels", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "Drag LogChannelAsset assets into the 'customChannels' list on the settings asset, " +
+                "or call IJSLoggerSettings.RegisterCustomChannel(asset) at startup. " +
+                "Channels listed here are filtered by their string Id.",
+                MessageType.None);
+
+            var customChannels = _settings.CustomChannels;
+            if (customChannels != null)
+            {
+                for (var i = 0; i < customChannels.Count; i++)
+                {
+                    var asset = customChannels[i];
+                    if (asset == null) continue;
+                    DrawCustomChannelRow(asset);
+                }
+            }
+
             serializedObject.ApplyModifiedProperties();
 
             if (GUI.changed)
@@ -208,6 +228,33 @@ namespace com.ijs.logger
             {
                 _settings.SetChannelScope(channel, newScope);
             }
+        }
+
+        private void DrawCustomChannelRow(LogChannelAsset asset)
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.BeginHorizontal();
+
+            var id = asset.Id;
+            var config = _settings.GetChannelConfig(id);
+            var isEnabled = config?.enabled ?? asset.DefaultEnabled;
+            var scope = config?.scope ?? asset.DefaultScope;
+
+            var newEnabled = EditorGUILayout.Toggle(isEnabled, GUILayout.Width(20));
+            EditorGUILayout.LabelField(id, GUILayout.Width(120));
+            var newScope = (ChannelScope)EditorGUILayout.EnumPopup(scope, GUILayout.Width(100));
+
+            var statusColor = GetStatusColor(newEnabled, newScope);
+            var oldColor = GUI.backgroundColor;
+            GUI.backgroundColor = statusColor;
+            EditorGUILayout.LabelField(GetStatusText(newEnabled, newScope), EditorStyles.helpBox, GUILayout.Width(100));
+            GUI.backgroundColor = oldColor;
+
+            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.EndVertical();
+
+            if (newEnabled != isEnabled) _settings.SetChannelEnabled(id, newEnabled);
+            if (newScope != scope) _settings.SetChannelScope(id, newScope);
         }
 
         private Color GetStatusColor(bool enabled, ChannelScope scope)

@@ -28,14 +28,46 @@ namespace com.ijs.logger
     }
 
     /// <summary>
+    /// Configuration for a custom string-keyed channel (e.g. one registered via a
+    /// <see cref="LogChannelAsset"/>). Mirrors <see cref="ChannelConfig"/> but keyed on an id.
+    /// </summary>
+    [Serializable]
+    public class NamedChannelConfig
+    {
+        [Tooltip("Stable channel id. Matches LogChannelAsset.Id and the string passed to IJSLogger.Create(...).")]
+        public string id;
+        public ChannelScope scope = ChannelScope.Both;
+        public bool enabled = true;
+        [Tooltip("Minimum log severity allowed for this channel. Logs below this level are suppressed even if the channel is enabled.")]
+        public LogType minLogType = LogType.Log;
+
+        public NamedChannelConfig() { }
+
+        public NamedChannelConfig(string id, ChannelScope scope = ChannelScope.Both, bool enabled = true,
+            LogType minLogType = LogType.Log)
+        {
+            this.id = id;
+            this.scope = scope;
+            this.enabled = enabled;
+            this.minLogType = minLogType;
+        }
+    }
+
+    /// <summary>
     /// Settings for IJSLogger system. Manages channel configurations and filtering.
     /// </summary>
     [CreateAssetMenu(fileName = "IJSLoggerSettings", menuName = "IJS/Logger Settings")]
     public class IJSLoggerSettings : ScriptableObject
     {
         [Header("Channel Configuration")]
-        [Tooltip("Configuration for each log channel")]
+        [Tooltip("Configuration for each built-in log channel")]
         [SerializeField] private List<ChannelConfig> channelConfigs = new List<ChannelConfig>();
+
+        [Tooltip("Custom user-defined channels. Drop LogChannelAsset assets here to make them visible in the Settings window.")]
+        [SerializeField] private List<LogChannelAsset> customChannels = new List<LogChannelAsset>();
+
+        [Tooltip("Per-id configuration for custom channels (matches LogChannelAsset.Id or any string id passed to IJSLogger.Create).")]
+        [SerializeField] private List<NamedChannelConfig> namedChannelConfigs = new List<NamedChannelConfig>();
 
         [Header("Rate Limiting")]
         [Tooltip("Enable global rate limiting")]
@@ -106,11 +138,55 @@ namespace com.ijs.logger
         }
 
         /// <summary>
+        /// Checks if a custom string-keyed channel is enabled based on current scope and configuration.
+        /// Unconfigured ids default to enabled to match the enum-channel behavior.
+        /// </summary>
+        public static bool IsChannelEnabled(string channelId)
+        {
+            if (string.IsNullOrEmpty(channelId)) return true;
+
+            var instance = Instance;
+            if (instance == null) return true;
+
+            var config = instance.FindNamedConfig(channelId);
+            if (config == null) return true;
+
+            if (!config.enabled) return false;
+
+#if UNITY_EDITOR
+            return config.scope == ChannelScope.EditorOnly || config.scope == ChannelScope.Both;
+#else
+            return config.scope == ChannelScope.BuildOnly || config.scope == ChannelScope.Both;
+#endif
+        }
+
+        /// <summary>
         /// Gets the configuration for a specific channel.
         /// </summary>
         public ChannelConfig GetChannelConfig(LogChannel channel)
         {
             return FindConfig(channel);
+        }
+
+        /// <summary>
+        /// Gets the configuration for a custom string-keyed channel, or null if none is registered.
+        /// </summary>
+        public NamedChannelConfig GetChannelConfig(string channelId) => FindNamedConfig(channelId);
+
+        /// <summary>
+        /// Returns the list of registered <see cref="LogChannelAsset"/>s. Used by the Settings window.
+        /// </summary>
+        public IReadOnlyList<LogChannelAsset> CustomChannels => customChannels;
+
+        private NamedChannelConfig FindNamedConfig(string id)
+        {
+            if (string.IsNullOrEmpty(id) || namedChannelConfigs == null) return null;
+            for (var i = 0; i < namedChannelConfigs.Count; i++)
+            {
+                var c = namedChannelConfigs[i];
+                if (c != null && c.id == id) return c;
+            }
+            return null;
         }
 
         // Hot-path lookup — avoids LINQ allocations on every log call. The list is tiny
@@ -157,6 +233,39 @@ namespace com.ijs.logger
             else
             {
                 channelConfigs.Add(new ChannelConfig(channel, scope, true));
+            }
+        }
+
+        /// <summary>Sets whether a custom string-keyed channel is enabled.</summary>
+        public void SetChannelEnabled(string channelId, bool enabled)
+        {
+            if (string.IsNullOrEmpty(channelId)) return;
+            var config = FindNamedConfig(channelId);
+            if (config != null) config.enabled = enabled;
+            else namedChannelConfigs.Add(new NamedChannelConfig(channelId, ChannelScope.Both, enabled));
+        }
+
+        /// <summary>Sets the scope for a custom string-keyed channel.</summary>
+        public void SetChannelScope(string channelId, ChannelScope scope)
+        {
+            if (string.IsNullOrEmpty(channelId)) return;
+            var config = FindNamedConfig(channelId);
+            if (config != null) config.scope = scope;
+            else namedChannelConfigs.Add(new NamedChannelConfig(channelId, scope, true));
+        }
+
+        /// <summary>
+        /// Registers a <see cref="LogChannelAsset"/> with the settings, creating a default
+        /// <see cref="NamedChannelConfig"/> from its defaults if one doesn't already exist.
+        /// </summary>
+        public void RegisterCustomChannel(LogChannelAsset asset)
+        {
+            if (asset == null) return;
+            if (!customChannels.Contains(asset)) customChannels.Add(asset);
+            if (FindNamedConfig(asset.Id) == null)
+            {
+                namedChannelConfigs.Add(new NamedChannelConfig(
+                    asset.Id, asset.DefaultScope, asset.DefaultEnabled, asset.DefaultMinLogType));
             }
         }
 
@@ -231,6 +340,19 @@ namespace com.ijs.logger
         {
             if (channel == LogChannel.Default) return true;
             var config = FindConfig(channel);
+            if (config == null) return true;
+            return IsAtLeast(logType, config.minLogType);
+        }
+
+        /// <summary>
+        /// Returns true if a log of <paramref name="logType"/> on the custom string-keyed
+        /// <paramref name="channelId"/> satisfies the channel's per-severity filter.
+        /// Unconfigured ids default to allowed.
+        /// </summary>
+        public bool IsChannelLogTypeAllowed(string channelId, LogType logType)
+        {
+            if (string.IsNullOrEmpty(channelId)) return true;
+            var config = FindNamedConfig(channelId);
             if (config == null) return true;
             return IsAtLeast(logType, config.minLogType);
         }

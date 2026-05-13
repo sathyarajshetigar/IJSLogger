@@ -354,6 +354,7 @@ namespace com.ijs.logger
         private bool _logsEnabled;
         private string _logPrefix;
         private LogChannel _channel;
+        private string _channelId;   // when non-null, takes precedence over _channel
 
         /// <summary>If true, the editor formatter highlights numeric tokens in red. Defaults to false (zero-alloc).</summary>
         public bool HighlightNumbers { get; set; }
@@ -364,6 +365,7 @@ namespace com.ijs.logger
             _logPrefix = string.Empty;
             _logsEnabled = logsEnabled;
             _channel = LogChannel.Default;
+            _channelId = null;
             _isNoOpLogger = !logsEnabled;
         }
 
@@ -378,6 +380,30 @@ namespace com.ijs.logger
                 return DisabledLogger;
 
             return new IJSLogger(prefix, color, logsEnabled, channel);
+        }
+
+        /// <summary>
+        /// String-keyed overload of <see cref="Create(string,Color?,bool,LogChannel)"/>: creates a logger
+        /// for a custom channel identified by <paramref name="channelId"/> (e.g. matching a
+        /// <see cref="LogChannelAsset"/>). The id is used as the Unity console tag and for filter lookup.
+        /// </summary>
+        public static IJSLogger Create(string prefix, Color? color, bool logsEnabled, string channelId)
+        {
+            if (!ShouldCreateLogger(logsEnabled))
+                return DisabledLogger;
+
+            return new IJSLogger(prefix, color, logsEnabled, channelId);
+        }
+
+        /// <summary>
+        /// Convenience overload that derives prefix/color/enabled state from the
+        /// <paramref name="asset"/>'s defaults.
+        /// </summary>
+        public static IJSLogger Create(LogChannelAsset asset, string prefix = null, bool? logsEnabled = null)
+        {
+            if (asset == null) return Create();
+            var enabled = logsEnabled ?? asset.DefaultEnabled;
+            return Create(prefix ?? asset.Id, asset.Color, enabled, asset.Id);
         }
 
         private static bool ShouldCreateLogger(bool logsEnabled)
@@ -397,6 +423,18 @@ namespace com.ijs.logger
             _logPrefix = prefix ?? string.Empty;
             _logsEnabled = logsEnabled;
             _channel = channel;
+            _channelId = null;
+            _isNoOpLogger = false;
+        }
+
+        /// <summary>String-keyed constructor; see <see cref="Create(string,Color?,bool,string)"/>.</summary>
+        public IJSLogger(string prefix, Color? color, bool logsEnabled, string channelId)
+        {
+            _logColor = color ?? Color.white;
+            _logPrefix = prefix ?? string.Empty;
+            _logsEnabled = logsEnabled;
+            _channel = LogChannel.Default;
+            _channelId = string.IsNullOrEmpty(channelId) ? null : channelId;
             _isNoOpLogger = false;
         }
 
@@ -543,7 +581,14 @@ namespace com.ijs.logger
         {
             if (!_logsEnabled || exception == null) return;
             if (!IsAllowed(LogType.Exception)) return;
-            if (!IJSLoggerSettings.IsChannelEnabled(_channel)) return;
+            if (!string.IsNullOrEmpty(_channelId))
+            {
+                if (!IJSLoggerSettings.IsChannelEnabled(_channelId)) return;
+            }
+            else if (!IJSLoggerSettings.IsChannelEnabled(_channel))
+            {
+                return;
+            }
 
             // Route through Debug.unityLogger so that, when the global handler is installed,
             // sinks receive the exception too. The global handler's IJSLogHandler.LogException
@@ -559,7 +604,7 @@ namespace com.ijs.logger
             string callerFilePath, int callerLineNumber, string callerMemberName)
         {
             if (!_logsEnabled) return;
-            if (!IsChannelAllowed(_channel, logType)) return;
+            if (!IsChannelAllowed(_channel, _channelId, logType)) return;
 
             // Add context if any.
             var contextPrefix = LogContext.CurrentContext;
@@ -576,7 +621,11 @@ namespace com.ijs.logger
                 callerFilePath, callerLineNumber, callerMemberName);
         }
 
-        private string ResolveTag() => _channel == LogChannel.Default ? null : _channel.ToString();
+        private string ResolveTag()
+        {
+            if (!string.IsNullOrEmpty(_channelId)) return _channelId;
+            return _channel == LogChannel.Default ? null : _channel.ToString();
+        }
 
         private static bool IsAllowed(LogType logType)
         {
@@ -587,6 +636,21 @@ namespace com.ijs.logger
         private static bool IsChannelAllowed(LogChannel channel, LogType logType)
         {
             if (!IsAllowed(logType)) return false;
+            if (!IJSLoggerSettings.IsChannelEnabled(channel)) return false;
+            var settings = IJSLoggerSettings.Instance;
+            return settings == null || settings.IsChannelLogTypeAllowed(channel, logType);
+        }
+
+        // Combined check that prefers the string id when present, else falls back to the enum channel.
+        private static bool IsChannelAllowed(LogChannel channel, string channelId, LogType logType)
+        {
+            if (!IsAllowed(logType)) return false;
+            if (!string.IsNullOrEmpty(channelId))
+            {
+                if (!IJSLoggerSettings.IsChannelEnabled(channelId)) return false;
+                var s = IJSLoggerSettings.Instance;
+                return s == null || s.IsChannelLogTypeAllowed(channelId, logType);
+            }
             if (!IJSLoggerSettings.IsChannelEnabled(channel)) return false;
             var settings = IJSLoggerSettings.Instance;
             return settings == null || settings.IsChannelLogTypeAllowed(channel, logType);
